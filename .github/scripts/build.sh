@@ -10,7 +10,7 @@ cargo clippy --release --locked --target "$target" -- -D warnings
 cargo build --release --locked --target "$target"
 component="$target_dir/$target/release/pumpgsit.wasm"
 wasm-tools validate --features all "$component"
-wit="$target_dir/pumpgsit.component.wit"
+wit="$target_dir/PumpGsit.component.wit"
 wasm-tools component wit "$component" > "$wit"
 grep -E '^  import wasi:filesystem/types@0\.3\.[0-9]+;' "$wit"
 if grep '^  import wasi:' "$wit" | grep -vE '@0\.3\.[0-9]+;$'; then
@@ -23,5 +23,5 @@ grep -F 'export pumpkin:plugin/gametest-callbacks@0.2.0;' "$wit"
 # Rebuild the staging directory when a previous build used the same target directory.
 rm -rf -- "$assets"
 mkdir -p "$assets"
-cp "$component" "$assets/"
-(cd "$assets" && sha256sum pumpgsit.wasm > SHA256SUMS)
+cp "$component" "$assets/PumpGsit.wasm"
+(cd "$assets" && sha256sum PumpGsit.wasm > SHA256SUMS)

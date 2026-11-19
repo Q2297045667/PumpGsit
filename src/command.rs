@@ -44,10 +44,10 @@ const GROUPS: &[(&str, &[&str])] = &[
 
 /// Registers a permission, mapping Bukkit's GSit prefix into Pumpkin's required namespace.
 fn permission(ctx: &Context, key: &str, operator: bool, children: &[&str]) -> Result<(), String> {
-    let node = format!("pumpgsit:{key}");
+    let node = format!("PumpGsit:{key}");
     let registered = ctx.register_permission(&Permission {
         node: node.clone(),
-        description: format!("pumpgsit {key}"),
+        description: format!("PumpGsit {key}"),
         default: if operator {
             PermissionDefault::Op(PermissionLevel::Two)
         } else {
@@ -56,7 +56,7 @@ fn permission(ctx: &Context, key: &str, operator: bool, children: &[&str]) -> Re
         children: children
             .iter()
             .map(|name| PermissionChild {
-                node: format!("pumpgsit:{name}"),
+                node: format!("PumpGsit:{name}"),
                 value: true,
             })
             .collect(),
@@ -117,7 +117,7 @@ pub fn register(ctx: &Context) -> Result<(), String> {
         ),
         (
             &["pumpgsitreload", "gsitreload", "gsitrl"],
-            "Reload pumpgsit settings",
+            "Reload PumpGsit settings",
             "reload",
         ),
     ];
@@ -137,7 +137,7 @@ pub fn register(ctx: &Context) -> Result<(), String> {
         if i == 5 {
             toggle(&cmd, "toggle", TOGGLE + 20)
         }
-        ctx.register_command(cmd, &format!("pumpgsit:{perm}"));
+        ctx.register_command(cmd, &format!("PumpGsit:{perm}"));
     }
     Ok(())
 }
@@ -160,16 +160,16 @@ async fn preferences(
     args: &ConsumedArgs,
 ) -> Result<&'static str, &'static str> {
     let (pref, node, on, off) = match (id - TOGGLE) / 10 {
-        0 => (Preference::Sit, "pumpgsit:sittoggle", "sit_on", "sit_off"),
+        0 => (Preference::Sit, "PumpGsit:sittoggle", "sit_on", "sit_off"),
         1 => (
             Preference::PlayerSit,
-            "pumpgsit:playersittoggle",
+            "PumpGsit:playersittoggle",
             "stack_on",
             "stack_off",
         ),
         _ => (
             Preference::Crawl,
-            "pumpgsit:crawltoggle",
+            "PumpGsit:crawltoggle",
             "crawl_on",
             "crawl_off",
         ),
@@ -223,17 +223,17 @@ async fn preferences(
 /// Toggles a player posture after checking permission, current activity, world and server acceptance.
 async fn posture(id: u32, player: &Player, server: &Server) -> Result<(), &'static str> {
     let (activity, perm, pose) = match id {
-        SIT => (Activity::Sit, "pumpgsit:sit", None),
-        2 => (Activity::Lay, "pumpgsit:lay", Some(Pose::Lay)),
-        3 => (Activity::LegsUp, "pumpgsit:legsup", Some(Pose::LegsUp)),
+        SIT => (Activity::Sit, "PumpGsit:sit", None),
+        2 => (Activity::Lay, "PumpGsit:lay", Some(Pose::Lay)),
+        3 => (Activity::LegsUp, "PumpGsit:legsup", Some(Pose::LegsUp)),
         4 => (
             Activity::BellyFlop,
-            "pumpgsit:bellyflop",
+            "PumpGsit:bellyflop",
             Some(Pose::BellyFlop),
         ),
-        5 => (Activity::Spin, "pumpgsit:spin", Some(Pose::Spin)),
+        5 => (Activity::Spin, "PumpGsit:spin", Some(Pose::Spin)),
         CRAWL => {
-            if !player.has_permission("pumpgsit:crawl".into()).await {
+            if !player.has_permission("PumpGsit:crawl".into()).await {
                 return Err("permission");
             }
             if crawl::active(player) {
@@ -286,7 +286,7 @@ pub async fn run(
     } else if id == HELP {
         Ok(Some("help"))
     } else if id == RELOAD {
-        if !sender.has_permission("pumpgsit:reload".into()).await {
+        if !sender.has_permission("PumpGsit:reload".into()).await {
             Err("permission")
         } else {
             crate::reload(&server)

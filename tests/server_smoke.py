@@ -1,4 +1,4 @@
-"""Exercise pumpgsit through Pumpkin's console in disposable, loopback-only servers."""
+"""Exercise PumpGsit through Pumpkin's console in disposable, loopback-only servers."""
 import argparse
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,12 +32,12 @@ def wait_for(process, log, text, offset=0, timeout=45):
 
 
 @contextmanager
-def boot(server, component, root, run, expected=f"Loaded pumpgsit ({VERSION})"):
+def boot(server, component, root, run, expected=f"Loaded PumpGsit ({VERSION})"):
     """Start the target binary and ensure it unloads plugins and exits at the end."""
     plugins = root / "plugins"
     plugins.mkdir(parents=True, exist_ok=True)
     if component is not None:
-        shutil.copyfile(component, plugins / "pumpgsit.wasm")
+        shutil.copyfile(component, plugins / "PumpGsit.wasm")
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -62,7 +62,12 @@ use_tty = false
 enabled = false
 [telemetry]
 enabled = false
-[plugins.overrides.pumpgsit]
+[plugins]
+allow_unsigned = false
+[plugins.overrides.PumpkinPIE]
+allow_unsigned = true
+[plugins.overrides.PumpGsit]
+allow_unsigned = true
 allowed_permissions = ["fs.read.data", "fs.write.data"]
 ''')
     log = root / f"smoke-{run}.log"
@@ -98,26 +103,26 @@ allowed_permissions = ["fs.read.data", "fs.write.data"]
         raise RuntimeError(f"Unclean shutdown, see {log}")
 
 
-def row_count(db):
-    """Read this test player's exception from a stopped server database."""
+def row_count(db, player=PLAYER):
+    """Read a test player's click-to-sit exception from a stopped server database."""
     with sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True) as connection:
-        return connection.execute(f"SELECT count(*) FROM {TABLE} WHERE uuid=?", (PLAYER,)).fetchone()[0]
+        return connection.execute(f"SELECT count(*) FROM {TABLE} WHERE uuid=?", (player,)).fetchone()[0]
 
 
 def exercise(args, root):
     """Check a new install, idempotent preferences, reload rollback, and a restarted old database."""
     root.mkdir(parents=True, exist_ok=True)
-    data = root / "plugins/data/pumpgsit"
+    data = root / "plugins/data/PumpGsit"
     db = data / "data/data.db"
     with boot(args.server, args.component, root, "fresh") as cmd:
         cmd("sit", "Run this command as a player.")
         cmd("pumpgsit help", "Repeat the current command")
         cmd("gsit help", "Repeat the current command")
-        cmd("plugin unload pumpgsit", "Plugin pumpgsit unloaded successfully")
+        cmd("plugin unload PumpGsit", "Plugin PumpGsit unloaded successfully")
         shutil.copyfile(args.component, root / "reload.wasm")
         cmd("plugin load reload.wasm", "Plugin reload.wasm loaded successfully")
         cmd("sit help", "Repeat the current command")
-        cmd("pumpgsitreload", "pumpgsit configuration reloaded.")
+        cmd("pumpgsitreload", "PumpGsit configuration reloaded.")
         cmd("gsit toggle unknown-offline-name on", "original player's UUID")
         for _ in range(2):
             cmd(f"sit toggle {PLAYER} off", "Click-to-sit disabled.")
@@ -126,15 +131,28 @@ def exercise(args, root):
         cfg.write_text("invalid [")
         cmd("gsitreload", "previous settings are still active")
         cfg.write_text(valid.replace('language = "en_us"', 'language = "zh_cn"'))
-        cmd("gsitrl", "pumpgsit 配置已重新加载")
+        cmd("gsitrl", "PumpGsit 配置已重新加载")
         cmd("glayback", "请以玩家身份")
-    assert not (root / "plugins/data/gsit").exists()
+    assert {entry.name for entry in data.parent.iterdir()} == {"PumpGsit"}
     assert row_count(db) == 1
     with boot(args.server, args.component, root, "restart") as cmd:
         cmd(f"sit toggle {PLAYER}", "已开启右键方块坐下")
     assert row_count(db) == 0
+    check_upgrade(args, root / "upgrade", cfg)
+    print(f"Passed fresh install, aliases, console, SQLite, reload, i18n, restart and upgrade in {root}")
+
+
+def check_upgrade(args, root, config):
+    """Move a stopped server's lowercase data directory and verify its configuration and SQLite preferences."""
+    old_data = root / "plugins/data/pumpgsit"
+    (old_data / "data").mkdir(parents=True)
+    shutil.copyfile(config, old_data / "config.toml")
     legacy = Path(__file__).resolve().parents[1] / "doc/fixtures/gsit-3.8.0.db"
-    shutil.copyfile(legacy, db)
+    shutil.copyfile(legacy, old_data / "data/data.db")
+    # A distinct intermediate name also works on case-insensitive filesystems.
+    staging = old_data.rename(old_data.with_name("rename-in-progress"))
+    data = staging.rename(old_data.with_name("PumpGsit"))
+    db = data / "data/data.db"
     with sqlite3.connect(db) as src:
         old_uuid, = src.execute(f"SELECT uuid FROM {TABLE} LIMIT 1").fetchone()
     with boot(args.server, args.component, root, "legacy") as cmd:
@@ -142,7 +160,10 @@ def exercise(args, root):
     with sqlite3.connect(db) as conn:
         assert conn.execute(f"SELECT count(*) FROM {TABLE} WHERE uuid=?", (old_uuid,)).fetchone()[0] == 0
         assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-    print(f"Passed fresh install, aliases, console, SQLite, reload, i18n and restart in {root}")
+    with boot(args.server, args.component, root, "post-upgrade") as cmd:
+        cmd(f"sit toggle {old_uuid}", "已关闭右键方块坐下")
+    assert row_count(db, old_uuid) == 1
+    assert {entry.name for entry in data.parent.iterdir()} == {"PumpGsit"}
 
 
 if __name__ == "__main__":
@@ -150,4 +171,4 @@ if __name__ == "__main__":
     parser.add_argument("server", type=lambda p: Path(p).resolve())
     parser.add_argument("component", type=lambda p: Path(p).resolve())
     args = parser.parse_args()
-    exercise(args, Path(tempfile.mkdtemp(prefix="pumpgsit-server-test-")))
+    exercise(args, Path(tempfile.mkdtemp(prefix="PumpGsit-server-test-")))

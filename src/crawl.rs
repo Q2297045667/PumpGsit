@@ -35,7 +35,7 @@ fn id(player: &Player) -> i32 {
     player.as_entity().get_id() as i32
 }
 
-/// Reports whether this player has a pending or established pumpgsit crawl.
+/// Reports whether this player has a pending or established PumpGsit crawl.
 pub fn active(player: &Player) -> bool {
     prevent_swim_stop(id(player))
 }
@@ -46,7 +46,7 @@ pub fn prevent_swim_stop(entity_id: i32) -> bool {
 }
 
 /// Requires the same standing, unridden player as the original command and disallows
-/// the environmental conditions under which pumpgsit immediately stops the crawl.
+/// the environmental conditions under which PumpGsit immediately stops the crawl.
 fn can_start(player: &Player) -> bool {
     let entity = player.as_entity();
     entity.is_valid()

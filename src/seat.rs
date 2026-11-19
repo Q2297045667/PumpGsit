@@ -138,7 +138,7 @@ pub async fn allowed(player: &Player) -> bool {
     };
     (!listed(&cfg.world_blacklist)
         && (cfg.world_whitelist.is_empty() || listed(&cfg.world_whitelist)))
-        || player.has_permission("pumpgsit:bypass.world".into()).await
+        || player.has_permission("PumpGsit:bypass.world".into()).await
 }
 
 /// Selects the support block the same sixteenth of a block below the feet as Bukkit.
@@ -321,9 +321,9 @@ pub async fn start(
         });
         for other in occupied {
             let node = if other.activity == Activity::Sit {
-                "pumpgsit:kick.sit"
+                "PumpGsit:kick.sit"
             } else {
-                "pumpgsit:kick.pose"
+                "PumpGsit:kick.pose"
             };
             if !player.has_permission(node.into()).await {
                 return Err("occupied");
@@ -402,7 +402,7 @@ pub async fn stack(player: &Player, target_id: u32, server: &Server) -> bool {
         || rider.get_vehicle().is_some()
         || crate::crawl::active(player)
         || (options.empty_hand_only && player.get_item_in_hand(Hand::Right).is_some())
-        || !player.has_permission("pumpgsit:playersit".into()).await
+        || !player.has_permission("PumpGsit:playersit".into()).await
         || !allowed(player).await
     {
         return false;
@@ -557,7 +557,7 @@ pub fn forget_return(id: u32) {
     RETURNS.with_borrow_mut(|m| m.remove(&id));
 }
 
-/// Ejects only player passengers recorded as pumpgsit rides on this player.
+/// Ejects only player passengers recorded as PumpGsit rides on this player.
 pub async fn eject(player: &Player, server: &Server) {
     let id = player.as_entity().get_id();
     let riders = SEATS.with_borrow(|m| {
@@ -632,7 +632,7 @@ pub fn cleanup_entities(entities: Vec<world::Entity>) {
     }
 }
 
-/// Detaches a pumpgsit rider before an external teleport issues its own position confirmation.
+/// Detaches a PumpGsit rider before an external teleport issues its own position confirmation.
 /// Pumpkin's built-in ride command unlinks without sending a second player teleport.
 /// Only a known plugin vehicle and a host-supplied Java profile name may use this path.
 pub async fn before_teleport(player: &Player, server: &Server) -> bool {

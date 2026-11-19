@@ -92,7 +92,7 @@ pub fn initialize(data_dir: &Path) -> Result<(), String> {
         }
         if header[18..20] != [1, 1] {
             return Err(format!(
-                "{}: pumpgsit requires a SQLite rollback-journal snapshot; checkpoint WAL and switch the staged copy to DELETE mode",
+                "{}: PumpGsit requires a SQLite rollback-journal snapshot; checkpoint WAL and switch the staged copy to DELETE mode",
                 path.display()
             ));
         }

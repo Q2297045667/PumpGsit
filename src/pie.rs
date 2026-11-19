@@ -137,7 +137,7 @@ fn resolve(callback: &Callback) -> Result<Option<bool>, String> {
 /// Answers an authenticated PIE callback, declining missing viewers and undeclared names.
 pub fn handle(sender: String, msg: Vec<u8>) -> Result<Vec<u8>, String> {
     if sender != PROVIDER || msg.len() > 1 << 20 {
-        return Err("unexpected pumpgsit IPC sender or message size".into());
+        return Err("unexpected PumpGsit IPC sender or message size".into());
     }
     let callback: Callback = serde_json::from_slice(&msg).map_err(|e| e.to_string())?;
     if callback.op != "on_request" || callback.namespace != NAMESPACE {

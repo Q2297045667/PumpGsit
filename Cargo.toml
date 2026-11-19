@@ -1,12 +1,13 @@
 [package]
-name = "pumpgsit"
-version = "0.1.1"
+name = "PumpGsit"
+version = "0.1.2"
 edition = "2024"
 license = "GPL-3.0-only"
 description = "Seats, poses and crawling for Pumpkin using its Wasm 0.2 plugin API"
-repository = "https://github.com/Q2297045667/pumpgsit"
+repository = "https://github.com/Q2297045667/PumpGsit"
 
 [lib]
+name = "pumpgsit"
 crate-type = ["cdylib"]
 
 [dependencies]

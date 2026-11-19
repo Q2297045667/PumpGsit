@@ -1,4 +1,4 @@
-//! pumpgsit guest for Pumpkin's asynchronous component ABI.
+//! PumpGsit guest for Pumpkin's asynchronous component ABI.
 #[allow(clippy::too_many_arguments)] // Function signatures are fixed by the host's WIT.
 mod bindings {
     wit_bindgen::generate!({world:"plugin",path:"wit"});
@@ -42,11 +42,11 @@ static PREFERENCES: LazyLock<State<Preferences>> = LazyLock::new(State::default)
 
 /// Returns a settings snapshot without holding a guest borrow through a host callback.
 fn config() -> Arc<config::Config> {
-    SETTINGS.with_borrow(|cfg| cfg.as_ref().expect("pumpgsit loaded").clone())
+    SETTINGS.with_borrow(|cfg| cfg.as_ref().expect("PumpGsit loaded").clone())
 }
 /// Gets the loaded context without holding the state lock during a host call.
 fn context() -> Arc<Context> {
-    HOST.with_borrow(|ctx| ctx.as_ref().expect("pumpgsit loaded").clone())
+    HOST.with_borrow(|ctx| ctx.as_ref().expect("PumpGsit loaded").clone())
 }
 /// Returns the plugin's WASI preopened data directory.
 fn data_dir() -> PathBuf {
@@ -58,7 +58,7 @@ fn server() -> Server {
 }
 /// Reports operational errors to the server console.
 fn warn(error: &str) {
-    logging::log(Level::Warn, &format!("pumpgsit: {error}"))
+    logging::log(Level::Warn, &format!("PumpGsit: {error}"))
 }
 /// Resolves an online player's preference, reading the database once per settings generation.
 fn online_preference(player: &Player, feature: Preference) -> Result<bool, String> {
@@ -123,7 +123,7 @@ fn hint(player: &Player, sneak: bool) {
         )
     }
 }
-/// Checks whether this player's active seat currently renders a pumpgsit pose.
+/// Checks whether this player's active seat currently renders a PumpGsit pose.
 fn posing(player: &Player) -> bool {
     seat::activity(player).is_some_and(Activity::is_pose)
 }
@@ -180,7 +180,7 @@ fn events(ctx: &Context) {
     }
 }
 
-/// Applies pumpgsit changes only to events that earlier handlers permitted.
+/// Applies PumpGsit changes only to events that earlier handlers permitted.
 async fn dispatch(server: &Server, event: &mut Event) {
     match event {
         Event::PlayerInteractEvent(e) if !e.cancelled => {
@@ -191,7 +191,7 @@ async fn dispatch(server: &Server, event: &mut Event) {
             if matches!(e.action, InteractAction::RightClickBlock)
                 && let Some(pos) = e.clicked_pos
                 && let Some(hit) = seat::click_target(&e.player, pos)
-                && e.player.has_permission("pumpgsit:sitclick".into()).await
+                && e.player.has_permission("PumpGsit:sitclick".into()).await
                 && enabled(&e.player, Preference::Sit)
                 && seat::start(&e.player, server, Activity::Sit, Some((pos, hit)))
                     .await
@@ -228,7 +228,7 @@ async fn dispatch(server: &Server, event: &mut Event) {
                 let can_start = e.is_sneaking
                     && !crawl::active(&e.player)
                     && (cfg.crawl.corridor_crawl || cfg.crawl.double_sneak)
-                    && e.player.has_permission("pumpgsit:crawlsneak".into()).await
+                    && e.player.has_permission("PumpGsit:crawlsneak".into()).await
                     && seat::allowed(&e.player).await
                     && enabled(&e.player, Preference::Crawl);
                 crawl::sneak(&e.player, e.is_sneaking, can_start).await;
@@ -338,7 +338,7 @@ async fn dispatch(server: &Server, event: &mut Event) {
     }
 }
 
-/// Applies the command blacklist during active pumpgsit actions with the upstream bypass.
+/// Applies the command blacklist during active PumpGsit actions with the upstream bypass.
 async fn blocked(player: &Player, command: &str) -> bool {
     if seat::activity(player).is_none() && !crawl::active(player) {
         return false;
@@ -354,7 +354,7 @@ async fn blocked(player: &Player, command: &str) -> bool {
         .any(|cmd| name.eq_ignore_ascii_case(cmd.trim_start_matches('/')));
     if denied
         && !player
-            .has_permission("pumpgsit:bypass.command".into())
+            .has_permission("PumpGsit:bypass.command".into())
             .await
     {
         player.send_system_message(message(Some(player), "blocked"), false);
@@ -373,7 +373,7 @@ impl exports::pumpkin::plugin::metadata::Guest for PumpGsit {
             version: option_env!("PUMPGSIT_BUILD_VERSION")
                 .unwrap_or(env!("CARGO_PKG_VERSION"))
                 .into(),
-            authors: vec!["pumpgsit contributors (based on GSit by Gecolay)".into()],
+            authors: vec!["PumpGsit contributors (based on GSit by Gecolay)".into()],
             description: env!("CARGO_PKG_DESCRIPTION").into(),
             dependencies: vec![],
             permissions: vec!["fs.read.data".into(), "fs.write.data".into()],
@@ -429,7 +429,7 @@ impl Guest for PumpGsit {
         dispatch(&server, &mut event).await;
         event
     }
-    /// Routes Brigadier's selected command node to the corresponding pumpgsit operation.
+    /// Routes Brigadier's selected command node to the corresponding PumpGsit operation.
     async fn handle_command(
         id: u32,
         sender: CommandSender,
@@ -469,7 +469,7 @@ impl Guest for PumpGsit {
     async fn handle_ai_goal_stop(_: u32, _: Server, _: Entity) {}
     /// Receives the unused goal tick callback required by the ABI.
     async fn handle_ai_goal_tick(_: u32, _: Server, _: Entity) {}
-    /// pumpgsit contributes no world generation phase.
+    /// PumpGsit contributes no world generation phase.
     async fn handle_generate_phase(_: u32, _: GenerationPhase, _: ChunkBuffer) {}
 }
 

@@ -1,4 +1,4 @@
-"""Check both load orders of pumpgsit and a real PumpkinPIE component in disposable servers."""
+"""Check both load orders of PumpGsit and a real PumpkinPIE component in disposable servers."""
 
 import argparse
 from pathlib import Path
@@ -17,7 +17,7 @@ MODIFIED = "false false false true true false"
 
 
 def wait_for_registration(command, log, expected):
-    """Query the provider until pumpgsit's registration retry succeeds or times out."""
+    """Query the provider until PumpGsit's registration retry succeeds or times out."""
     deadline = time.monotonic() + 35
     while time.monotonic() < deadline:
         offset = len(log.read_text())
@@ -31,15 +31,15 @@ def wait_for_registration(command, log, expected):
 def exercise(server, component, provider, root):
     """Read an upstream fixture through PIE, hot load both plugins, then verify after restart."""
     root.mkdir(parents=True, exist_ok=True)
-    data = root / "plugins/data/pumpgsit/data"
+    data = root / "plugins/data/PumpGsit/data"
     data.mkdir(parents=True)
     shutil.copyfile(Path(__file__).resolve().parents[1] / "doc/fixtures/gsit-3.8.0.db", data / "data.db")
     shutil.copyfile(provider, root / PROVIDER)
-    with boot(server, component, root, "pumpgsit-first") as command:
-        log = root / "smoke-pumpgsit-first.log"
+    with boot(server, component, root, "PumpGsit-first") as command:
+        log = root / "smoke-PumpGsit-first.log"
         command(f"plugin load {PROVIDER}", "loaded successfully")
         wait_for_registration(command, log, ORIGINAL)
-        command("pie expansions", "%gsit%  from pumpgsit:")
+        command("pie expansions", "%gsit%  from PumpGsit:")
         command(f"pie parse NoViewer={BARE}", f"NoViewer={BARE}")
         command("pie parse Bad=%gsit_toggle:unknown-name%", "unresolved: gsit_toggle")
         command(f"sit toggle {PLAYER} on", "Click-to-sit enabled.")
@@ -49,17 +49,17 @@ def exercise(server, component, provider, root):
         command(f"plugin load {PROVIDER}", "loaded successfully")
         wait_for_registration(command, log, MODIFIED)
 
-    # Start with the provider alone, then load pumpgsit into its pre-existing registry.
-    (root / "plugins/pumpgsit.wasm").rename(root / "pumpgsit.wasm")
+    # Start with the provider alone, then load PumpGsit into its pre-existing registry.
+    (root / "plugins/PumpGsit.wasm").rename(root / "PumpGsit.wasm")
     shutil.copyfile(provider, root / "plugins" / PROVIDER)
     with boot(server, None, root, "pie-first", expected="Loaded PumpkinPIE (0.2.6)") as command:
         log = root / "smoke-pie-first.log"
         for _ in range(2):
-            command("plugin load pumpgsit.wasm", "loaded successfully")
+            command("plugin load PumpGsit.wasm", "loaded successfully")
             wait_for_registration(command, log, MODIFIED)
-            command("plugin unload pumpgsit", "unloaded successfully")
+            command("plugin unload PumpGsit", "unloaded successfully")
             command(f"pie parse Offline={TARGETED}", f"Offline={TARGETED}")
-        command("plugin load pumpgsit.wasm", "loaded successfully")
+        command("plugin load PumpGsit.wasm", "loaded successfully")
         wait_for_registration(command, log, MODIFIED)
 
 
@@ -69,7 +69,7 @@ def main():
     for name in ("server", "component", "pie"):
         parser.add_argument(f"--{name}", type=Path, required=True)
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="pumpgsit-pie-") as temp:
+    with tempfile.TemporaryDirectory(prefix="PumpGsit-pie-") as temp:
         exercise(args.server.resolve(), args.component.resolve(), args.pie.resolve(), Path(temp))
     print("PIE load orders, six placeholders, hot reload, SQLite restart and clean shutdown passed.")
 
