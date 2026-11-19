@@ -15,9 +15,8 @@ wasm-tools component wit "$component" > "$wit"
 grep -F 'export pumpkin:plugin/metadata@0.2.0;' "$wit"
 grep -F 'export pumpkin:plugin/gametest-callbacks@0.2.0;' "$wit"
 
-# The provider binary and its matching GPL source are distributed as a pair.
-(cd dist && sha256sum -c SHA256SUMS)
-wasm-tools validate --features all dist/pumpkin_pie_plugin.wasm
+# Rebuild the staging directory when a previous build used the same target directory.
+rm -rf -- "$assets"
 mkdir -p "$assets"
-cp "$component" dist/pumpkin_pie_plugin.wasm dist/pumpkinpie-0.2.6-source.tar.gz "$assets/"
-(cd "$assets" && sha256sum pumpgsit.wasm pumpkin_pie_plugin.wasm pumpkinpie-0.2.6-source.tar.gz > SHA256SUMS)
+cp "$component" "$assets/"
+(cd "$assets" && sha256sum pumpgsit.wasm > SHA256SUMS)

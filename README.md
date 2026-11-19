@@ -4,10 +4,10 @@
 
 ## 下载
 
-- **正式版**按版本标签发布。生产服可从最新正式版下载插件，并在同一发布页取得校验文件与可选附件。[下载最新正式版 pumpgsit.wasm](https://github.com/Q2297045667/pumpgsit/releases/latest/download/pumpgsit.wasm) · [正式版发布说明](https://github.com/Q2297045667/pumpgsit/releases/latest)
+- **正式版**按版本标签发布。生产服可从最新正式版下载插件。[下载最新正式版 pumpgsit.wasm](https://github.com/Q2297045667/pumpgsit/releases/latest/download/pumpgsit.wasm) · [正式版发布说明](https://github.com/Q2297045667/pumpgsit/releases/latest)
 - **每夜构建**计划于北京时间每日 02:17 从默认分支生成。打开每夜发布列表，选择所需日期及提交的预发布版，从附件下载同名插件。服务端插件列表会显示形如 `0.1.0-nightly.YYYYMMDD+提交短号` 的版本。[每夜发布列表](https://github.com/Q2297045667/pumpgsit/releases?q=nightly) · [工作流运行记录](https://github.com/Q2297045667/pumpgsit/actions/workflows/release.yml)
 
-每个版本附带 `SHA256SUMS`。需要在聊天或计分板里使用 `%gsit_sitting%` 等占位符时，再从同一版本下载配套的 `pumpkin_pie_plugin.wasm`。这个可选组件是适配目标宿主的 PumpkinPIE 0.2.6，发布附件中也提供其完整对应源码。[占位符安装与测试](doc/占位符.md)
+正式版与每夜版均提供 `pumpgsit.wasm` 和 `SHA256SUMS`。将两份文件下载到同一目录后执行 `sha256sum -c SHA256SUMS`，应显示 `pumpgsit.wasm: OK`。
 
 ## 安装
 
@@ -27,6 +27,7 @@
 ## 文档
 
 - [命令、别名、权限与 TOML 配置](doc/使用与配置.md)
+- [六个占位符与可选联动](doc/占位符.md)
 - [旧库备份、迁移、核验与回滚](doc/存储.md)
 - [构建、发布、功能对照与已知差异](doc/构建与验证.md)
 - [Java 客户端验收与截图](doc/客户端验证.md)
