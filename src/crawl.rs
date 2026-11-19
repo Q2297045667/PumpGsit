@@ -7,14 +7,13 @@ use crate::bindings::pumpkin::plugin::{
     uuid::Uuid,
     world::World,
 };
-use std::{cell::RefCell, collections::HashMap, time::Instant};
+use crate::state::State;
+use std::{collections::HashMap, sync::LazyLock, time::Instant};
 
 // Session-local client entity IDs are separate from Pumpkin's positive world entity IDs.
-thread_local! {
-    static CRAWLS: RefCell<HashMap<i32, Crawl>> = RefCell::default();
-    static LAST_SNEAK: RefCell<HashMap<i32, Instant>> = RefCell::default();
-    static NEXT_CLIENT_ID: RefCell<i32> = const { RefCell::new(-1_000_000_000) };
-}
+static CRAWLS: LazyLock<State<HashMap<i32, Crawl>>> = LazyLock::new(State::default);
+static LAST_SNEAK: LazyLock<State<HashMap<i32, Instant>>> = LazyLock::new(State::default);
+static NEXT_CLIENT_ID: State<i32> = State::new(-1_000_000_000);
 
 #[derive(Clone, Copy, PartialEq)]
 struct Ceiling {
@@ -113,7 +112,8 @@ async fn begin(player: &Player, corridor: bool) -> Result<(), String> {
 /// Removes the private collision entities and allows Pumpkin to select the normal pose
 /// from the available headroom. An ordinary vanilla swim is left alone.
 pub async fn stop(player: &Player) {
-    let Some(crawl) = CRAWLS.with_borrow_mut(|crawls| crawls.remove(&id(player))) else {
+    let key = id(player);
+    let Some(crawl) = CRAWLS.with_borrow_mut(|crawls| crawls.remove(&key)) else {
         return;
     };
     let entity = player.as_entity();
@@ -127,7 +127,8 @@ pub async fn stop(player: &Player) {
 
 /// Forgets any double-sneak timer when the player leaves, changes world, or the plugin unloads.
 pub async fn cleanup(player: &Player) {
-    LAST_SNEAK.with_borrow_mut(|sneaks| sneaks.remove(&id(player)));
+    let key = id(player);
+    LAST_SNEAK.with_borrow_mut(|sneaks| sneaks.remove(&key));
     stop(player).await;
 }
 

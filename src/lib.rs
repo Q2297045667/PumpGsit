@@ -9,6 +9,7 @@ mod crawl;
 mod pie;
 mod pose;
 mod seat;
+mod state;
 mod storage;
 
 use bindings::pumpkin::plugin::{
@@ -25,27 +26,35 @@ use bindings::pumpkin::plugin::{
 };
 use bindings::*;
 use seat::Activity;
-use std::{cell::RefCell, collections::HashMap, path::PathBuf, rc::Rc};
+use state::State;
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, LazyLock},
+};
 use storage::Preference;
 
-thread_local! {
-    static SETTINGS: RefCell<Option<Rc<config::Config>>> = const { RefCell::new(None) };
-    static HOST:RefCell<Option<Context>>=const{RefCell::new(None)};
-    static TASK:RefCell<Option<u32>>=const{RefCell::new(None)};
-    static PREFERENCES: RefCell<HashMap<(u64, u64, Preference), bool>> = RefCell::default();
-}
+type Preferences = HashMap<(u64, u64, Preference), bool>;
+static SETTINGS: State<Option<Arc<config::Config>>> = State::new(None);
+static HOST: State<Option<Arc<Context>>> = State::new(None);
+static TASK: State<Option<u32>> = State::new(None);
+static PREFERENCES: LazyLock<State<Preferences>> = LazyLock::new(State::default);
 
 /// Returns a settings snapshot without holding a guest borrow through a host callback.
-fn config() -> Rc<config::Config> {
+fn config() -> Arc<config::Config> {
     SETTINGS.with_borrow(|cfg| cfg.as_ref().expect("pumpgsit loaded").clone())
+}
+/// Gets the loaded context without holding the state lock during a host call.
+fn context() -> Arc<Context> {
+    HOST.with_borrow(|ctx| ctx.as_ref().expect("pumpgsit loaded").clone())
 }
 /// Returns the plugin's WASI preopened data directory.
 fn data_dir() -> PathBuf {
-    HOST.with_borrow(|c| PathBuf::from(c.as_ref().expect("pumpgsit loaded").get_data_folder()))
+    PathBuf::from(context().get_data_folder())
 }
 /// Obtains an owned server handle for IPC callbacks that receive no server argument.
 fn server() -> Server {
-    HOST.with_borrow(|c| c.as_ref().expect("pumpgsit loaded").get_server())
+    context().get_server()
 }
 /// Reports operational errors to the server console.
 fn warn(error: &str) {
@@ -137,7 +146,7 @@ async fn reload(server: &Server) -> Result<(), String> {
     storage::initialize(&data_dir())?;
     cleanup_all(server).await;
     PREFERENCES.with_borrow_mut(HashMap::clear);
-    SETTINGS.set(Some(Rc::new(config)));
+    SETTINGS.set(Some(Arc::new(config)));
     Ok(())
 }
 /// Registers only event callbacks used by the gameplay implementation.
@@ -379,7 +388,7 @@ impl Guest for PumpGsit {
         let dir = PathBuf::from(ctx.get_data_folder());
         let cfg = config::read(&dir)?;
         storage::initialize(&dir)?;
-        SETTINGS.set(Some(Rc::new(cfg)));
+        SETTINGS.set(Some(Arc::new(cfg)));
         i18n::load_translations(
             "pumpgsit.en_us",
             include_str!("../lang/en_us.json"),
@@ -390,12 +399,13 @@ impl Guest for PumpGsit {
             include_str!("../lang/zh_cn.json"),
             Locale::EnUs,
         );
+        let ctx = Arc::new(ctx);
+        HOST.set(Some(Arc::clone(&ctx)));
         command::register(&ctx)?;
         events(&ctx);
         for world in ctx.get_server().get_all_worlds() {
             seat::cleanup_entities(world.get_entities())
         }
-        HOST.set(Some(ctx));
         TASK.set(Some(scheduler::schedule_repeating_task(1, 1, 1)));
         Ok(())
     }

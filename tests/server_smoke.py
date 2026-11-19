@@ -91,6 +91,9 @@ allowed_permissions = ["fs.read.data", "fs.write.data"]
                     process.wait(10)
             process.stdin.close()
     content = log.read_text()
+    for line in content.splitlines():
+        if "Wasm plugin store driver failed" in line or "Wasm scheduled task failed" in line:
+            raise RuntimeError(f"Plugin callback failed in {log}\n{line}")
     if process.returncode or "All plugins unloaded successfully" not in content or "The server has stopped" not in content:
         raise RuntimeError(f"Unclean shutdown, see {log}")
 

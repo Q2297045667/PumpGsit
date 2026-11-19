@@ -1,11 +1,13 @@
 # pumpgsit
 
-在 Minecraft Java 26.3 中，玩家可以坐在台阶、楼梯或另一位玩家身上，也可以躺下、翘腿、趴下、旋转和爬行。pumpgsit 从 Gecolay 的 Bukkit/Paper 插件 GSit 3.8.0 迁移，使用 Pumpkin 的异步 Wasm 接口 `pumpkin:plugin@0.2.0`。
+在 Minecraft Java 26.3 中，玩家可以坐在台阶、楼梯或另一位玩家身上，也可以躺下、翘腿、趴下、旋转和爬行。pumpgsit 从 Gecolay 的 Bukkit/Paper 插件 GSit 3.8.0 迁移，主分支使用 Rust 目标 `wasm32-wasip3` 构建，插件接口为 `pumpkin:plugin@0.2.0`。
 
 ## 下载
 
 - **正式版**按版本标签发布。生产服可从最新正式版下载插件。[下载最新正式版 pumpgsit.wasm](https://github.com/Q2297045667/pumpgsit/releases/latest/download/pumpgsit.wasm) · [正式版发布说明](https://github.com/Q2297045667/pumpgsit/releases/latest)
-- **每夜构建**计划于北京时间每日 02:17 从默认分支生成。打开每夜发布列表，选择所需日期及提交的预发布版，从附件下载同名插件。服务端插件列表会显示形如 `0.1.0-nightly.YYYYMMDD+提交短号` 的版本。[每夜发布列表](https://github.com/Q2297045667/pumpgsit/releases?q=nightly) · [工作流运行记录](https://github.com/Q2297045667/pumpgsit/actions/workflows/release.yml)
+- **每夜构建**计划于北京时间每日 02:17 从默认分支生成。打开每夜发布列表，选择所需日期及提交的预发布版，从附件下载同名插件。服务端插件列表会显示形如 `0.1.1-nightly.YYYYMMDD+提交短号` 的版本。[每夜发布列表](https://github.com/Q2297045667/pumpgsit/releases?q=nightly) · [工作流运行记录](https://github.com/Q2297045667/pumpgsit/actions/workflows/release.yml)
+
+使用 WASI 0.3 时，请选择 `v0.1.1` 或对应的每夜构建。`v0.1.0` 和首个每夜版（提交 `4a5cbbf`）使用 `wasm32-wasip2`。
 
 正式版与每夜版均提供 `pumpgsit.wasm` 和 `SHA256SUMS`。将两份文件下载到同一目录后执行 `sha256sum -c SHA256SUMS`，应显示 `pumpgsit.wasm: OK`。
 

@@ -15,10 +15,10 @@ use crate::bindings::pumpkin::plugin::{
     uuid::Uuid,
     world::{self, Entity, EquipmentSlot, World},
 };
+use crate::state::State;
 use std::{
-    cell::{Cell, RefCell},
-    collections::{BTreeMap, BTreeSet},
-    rc::Rc,
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    sync::Arc,
 };
 
 const MARKER_TAG: &str = "pumpgsit.pose_marker";
@@ -80,8 +80,8 @@ struct Session {
     footrest: Option<Actor>,
     profile: Vec<u8>,
     profile_id: Uuid,
-    equipment: RefCell<Option<Rc<Gear>>>,
-    last_rotation: Cell<Option<(u8, u8, u8)>>,
+    equipment: State<Option<Arc<Gear>>>,
+    last_rotation: State<Option<(u8, u8, u8)>>,
     owner: Uuid,
     owner_entity: u32,
     world: u128,
@@ -91,15 +91,13 @@ struct Session {
     bed_state: Option<u16>,
     quarter: u8,
     restore_sleep: bool,
-    viewers: RefCell<BTreeMap<u128, u32>>,
-    ticks: Cell<u32>,
-    closed: Cell<bool>,
+    viewers: State<BTreeMap<u128, u32>>,
+    ticks: State<u32>,
+    closed: State<bool>,
 }
 
-thread_local! {
-    static POSES: RefCell<BTreeMap<u128,Rc<Session>>> = const { RefCell::new(BTreeMap::new()) };
-    static MARKERS: RefCell<BTreeSet<u128>> = const { RefCell::new(BTreeSet::new()) };
-}
+static POSES: State<BTreeMap<u128, Arc<Session>>> = State::new(BTreeMap::new());
+static MARKERS: State<BTreeSet<u128>> = State::new(BTreeSet::new());
 
 /// Converts the host's two machine words to a comparable stable identifier.
 fn key(id: Uuid) -> u128 {
@@ -260,7 +258,8 @@ async fn ride(client: &JavaPlayer, vehicle: u32, rider: u32) {
 impl Session {
     /// Takes a viewer snapshot before issuing callbacks that can re-enter the component.
     fn viewer_ids(&self) -> Vec<u128> {
-        self.viewers.borrow().keys().copied().collect()
+        self.viewers
+            .with_borrow(|viewers| viewers.keys().copied().collect())
     }
 
     /// The model offset is relative to the clicked surface, scaled like the original implementation.
@@ -400,22 +399,25 @@ impl Session {
 
     /// Tracks visibility before creating models and cleans up everyone who left the render range.
     async fn render(&self, owner: &Player, server: &Server) {
-        let tick = self.ticks.get();
-        self.ticks.set(tick.wrapping_add(1));
+        let tick = self.ticks.with_borrow_mut(|next| {
+            let tick = *next;
+            *next = tick.wrapping_add(1);
+            tick
+        });
         let range = f64::from(server.get_simulation_distance()) * 16.;
         let owner_flags = flags(&owner.as_entity());
         let yaw = owner.get_yaw();
         let mut retained = BTreeSet::new();
-        let previous = self.equipment.borrow().clone();
+        let previous = self.equipment.with_borrow(Clone::clone);
         let (gear, gear_changed) = match previous {
             Some(old) if !tick.is_multiple_of(5) => (old, false),
             old => {
-                let new = Rc::new(Gear::read(owner));
+                let new = Arc::new(Gear::read(owner));
                 let changed = match old {
                     Some(old) => !new.matches(&old).await,
                     None => true,
                 };
-                self.equipment.replace(Some(new.clone()));
+                self.equipment.set(Some(Arc::clone(&new)));
                 (new, changed)
             }
         };
@@ -428,7 +430,10 @@ impl Session {
                 (0, angle(head), 0)
             }
         };
-        let turn_changed = self.last_rotation.replace(Some(rotation)) != Some(rotation);
+        let turn_changed = self
+            .last_rotation
+            .with_borrow_mut(|last| last.replace(rotation))
+            != Some(rotation);
         let sleep_config = crate::config().pose;
         let day_tick = owner
             .get_player_time()
@@ -460,7 +465,9 @@ impl Session {
                 continue;
             }
             retained.insert(id);
-            let since = *self.viewers.borrow_mut().entry(id).or_insert(tick);
+            let since = self
+                .viewers
+                .with_borrow_mut(|viewers| *viewers.entry(id).or_insert(tick));
             let age = tick.wrapping_sub(since);
             if age == 0 {
                 self.introduce(&viewer, &java).await;
@@ -500,15 +507,13 @@ impl Session {
                 );
             }
         }
-        let gone: Vec<_> = self
-            .viewers
-            .borrow()
-            .keys()
-            .filter(|id| !retained.contains(id))
-            .copied()
-            .collect();
+        let gone: Vec<_> = self.viewers.with_borrow_mut(|viewers| {
+            viewers
+                .extract_if(.., |id, _| !retained.contains(id))
+                .map(|(id, _)| id)
+                .collect()
+        });
         for id in gone {
-            self.viewers.borrow_mut().remove(&id);
             if let Some(viewer) = server.get_player_by_uuid(uuid(id)) {
                 self.dismiss(&viewer, Some(owner), true).await;
             }
@@ -584,12 +589,12 @@ pub async fn start_at(
     };
     let options = crate::config().pose;
     let profile_id = profile_id(owner, avatar.uuid);
-    let session = Rc::new(Session {
+    let session = Arc::new(Session {
         pose,
         profile: protocol::profile(player, profile_id),
         profile_id,
-        equipment: RefCell::new(None),
-        last_rotation: Cell::new(None),
+        equipment: State::new(None),
+        last_rotation: State::new(None),
         avatar,
         name_mask,
         footrest,
@@ -602,14 +607,21 @@ pub async fn start_at(
         bed_state,
         quarter,
         restore_sleep: pose.sleeping() && options.lay_night_skip && !player.is_sleeping_ignored(),
-        viewers: RefCell::new(BTreeMap::new()),
-        ticks: Cell::new(0),
-        closed: Cell::new(false),
+        viewers: State::new(BTreeMap::new()),
+        ticks: State::new(0),
+        closed: State::new(false),
     });
-    if POSES.with_borrow(|poses| poses.contains_key(&key(owner))) {
+    let started = POSES.with_borrow_mut(|poses| {
+        if let Entry::Vacant(entry) = poses.entry(key(owner)) {
+            entry.insert(Arc::clone(&session));
+            true
+        } else {
+            false
+        }
+    });
+    if !started {
         return Err("pose already active".into());
     }
-    POSES.with_borrow_mut(|poses| poses.insert(key(owner), session.clone()));
     if session.restore_sleep {
         player.set_sleeping_ignored(true);
     }
@@ -622,7 +634,8 @@ pub async fn start_at(
 
 /// Ends the avatar session, restoring visible equipment, bed blocks and the owner's sleep setting.
 pub async fn stop(player: &Player, server: &Server) {
-    let session = POSES.with_borrow_mut(|poses| poses.remove(&key(player.get_id())));
+    let owner = key(player.get_id());
+    let session = POSES.with_borrow_mut(|poses| poses.remove(&owner));
     if let Some(session) = session {
         close(&session, Some(player), server).await;
     }
@@ -636,7 +649,7 @@ async fn close(session: &Session, owner: Option<&Player>, server: &Server) {
     {
         player.set_sleeping_ignored(false);
     }
-    let viewers = std::mem::take(&mut *session.viewers.borrow_mut());
+    let viewers = session.viewers.take();
     for id in viewers.into_keys() {
         if let Some(viewer) = server.get_player_by_uuid(uuid(id)) {
             session.dismiss(&viewer, owner, true).await;
@@ -655,22 +668,34 @@ pub async fn tick(server: &Server) {
         {
             session.render(player, server).await;
         } else {
-            POSES.with_borrow_mut(|poses| poses.remove(&key(session.owner)));
-            close(&session, owner.as_ref(), server).await;
+            let removed = POSES.with_borrow_mut(|poses| match poses.entry(key(session.owner)) {
+                Entry::Occupied(entry) if Arc::ptr_eq(entry.get(), &session) => {
+                    Some(entry.remove())
+                }
+                _ => None,
+            });
+            if let Some(removed) = removed {
+                close(&removed, owner.as_ref(), server).await;
+            }
         }
     }
 }
 
 /// Recognizes a marker left behind by an interrupted session, including one saved before the plugin rename.
 pub fn is_orphan(entity: &Entity) -> bool {
-    matches!(entity.get_type(), EntityType::Marker)
-        && (entity.has_scoreboard_tag(MARKER_TAG) || entity.has_scoreboard_tag(LEGACY_MARKER_TAG))
-        && !MARKERS.with_borrow(|live| live.contains(&key(entity.get_uuid())))
+    if !matches!(entity.get_type(), EntityType::Marker)
+        || !(entity.has_scoreboard_tag(MARKER_TAG) || entity.has_scoreboard_tag(LEGACY_MARKER_TAG))
+    {
+        return false;
+    }
+    let marker = key(entity.get_uuid());
+    !MARKERS.with_borrow(|live| live.contains(&marker))
 }
 
 /// Replays the real player's main- or off-hand success animation on all tracked avatars.
 pub fn swing(player: &Player, off_hand: bool, server: &Server) {
-    let session = POSES.with_borrow(|poses| poses.get(&key(player.get_id())).cloned());
+    let owner = key(player.get_id());
+    let session = POSES.with_borrow(|poses| poses.get(&owner).cloned());
     if let Some(session) = session {
         for id in session.viewer_ids() {
             if let Some(java) = server.get_player_by_uuid(uuid(id)).and_then(|p| client(&p)) {

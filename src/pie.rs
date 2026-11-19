@@ -6,14 +6,12 @@ use crate::{
     crawl, data_dir,
     seat::{self, Activity},
     server,
+    state::State,
     storage::{self, Preference},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{
-    cell::Cell,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 const PROVIDER: &str = "PumpkinPIE";
 // Existing templates use the original PlaceholderAPI namespace even after the plugin rename.
@@ -27,10 +25,8 @@ const NAMES: [&str; 6] = [
     "toggle",
 ];
 
-thread_local! {
-    static NEXT_CHECK: Cell<Option<Instant>> = const { Cell::new(None) };
-    static RETRY_SECONDS: Cell<u64> = const { Cell::new(2) };
-}
+static NEXT_CHECK: State<Option<Instant>> = State::new(None);
+static RETRY_SECONDS: State<u64> = State::new(2);
 
 /// Sends one version-zero operation to PIE and returns the successful response envelope.
 async fn request(operation: Value) -> Option<Value> {

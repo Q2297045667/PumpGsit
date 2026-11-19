@@ -27,7 +27,7 @@ else
     title="pumpgsit ${PLUGIN_VERSION:?missing nightly version from build}"
     channel+=(--prerelease --latest=false)
 fi
-printf 'Built from [%s](%s/%s/commit/%s).\n\n[Installation and SQLite migration](%s/%s/blob/%s/README.md).\n' \
+printf 'Build target wasm32-wasip3 (WASI 0.3), using the Pumpkin Wasm 0.2 plugin API.\n\nBuilt from [%s](%s/%s/commit/%s).\n\n[Installation and SQLite migration](%s/%s/blob/%s/README.md).\n' \
     "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA" \
     "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA" > "$notes"
 

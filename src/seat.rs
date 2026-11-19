@@ -8,11 +8,12 @@ use crate::{
         world::{self, BlockDirection, BlockState, World},
     },
     config, enabled, pose,
+    state::State,
     storage::Preference,
 };
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
+    sync::LazyLock,
 };
 
 const TAG: &str = "pumpgsit.seat.v1";
@@ -49,12 +50,11 @@ struct Seat {
     activity: Activity,
 }
 
-thread_local! {
-    static SEATS: RefCell<HashMap<u32,Seat>> = RefCell::default();
-    // A real movement callback is issued only after Pumpkin accepted the dismount acknowledgement.
-    static RETURNS: RefCell<HashMap<u32,(String,Position,bool)>> = RefCell::default();
-    static PENDING: RefCell<HashMap<u32,(String,Option<Key>)>> = RefCell::default();
-}
+type Riders<T> = LazyLock<State<HashMap<u32, T>>>;
+static SEATS: Riders<Seat> = LazyLock::new(State::default);
+// A movement callback is issued only after Pumpkin accepted the dismount acknowledgement.
+static RETURNS: Riders<(String, Position, bool)> = LazyLock::new(State::default);
+static PENDING: Riders<(String, Option<Key>)> = LazyLock::new(State::default);
 
 /// Holds an admission until every awaited spawn/mount callback has returned.
 struct Admission(u32);
@@ -67,11 +67,10 @@ impl Drop for Admission {
 
 /// Reserves the player and optionally the block to prevent concurrent successful mounts.
 fn reserve(id: u32, world: &str, block: Option<Key>) -> Result<Admission, &'static str> {
+    let exclusive = block.is_some() && !config().same_block_rest;
     PENDING.with_borrow_mut(|map| {
         if map.contains_key(&id)
-            || (block.is_some()
-                && !config().same_block_rest
-                && map.values().any(|(w, b)| w == world && *b == block))
+            || (exclusive && map.values().any(|(w, b)| w == world && *b == block))
         {
             return Err("occupied");
         }
