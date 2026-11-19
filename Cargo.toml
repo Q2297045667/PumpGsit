@@ -1,0 +1,18 @@
+[package]
+name = "pumpgsit"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Seats, poses and crawling for Pumpkin using its Wasm 0.2 plugin API"
+repository = "https://github.com/Q2297045667/pumpgsit"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled", "wasm32-wasi-vfs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.1"
+uuid = "1"
+wit-bindgen = { version = "=0.63.0", default-features = false, features = ["async", "macros", "std", "bitflags", "realloc"] }

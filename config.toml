@@ -1,0 +1,46 @@
+language = "en_us"
+client_language = true
+get_up_damage = false
+get_up_sneak = true
+get_up_return = false
+get_up_break = true
+allow_unsafe = false
+same_block_rest = false
+center_block = true
+custom_message = true
+world_blacklist = []
+world_whitelist = []
+material_blacklist = []
+command_blacklist = ["skin", "nick"]
+
+[sit]
+materials = ["#stairs", "#slabs", "#carpets", "#wool_carpets", "moss_carpet", "pale_moss_carpet", "shelf_mushroom", "snow"]
+bottom_part_only = true
+empty_hand_only = true
+max_distance = 0.0
+default_enabled = true
+
+[player_sit]
+allow_sit = true
+max_stack = 0
+sneak_ejects = true
+bottom_return = false
+empty_hand_only = true
+max_distance = 0.0
+default_enabled = true
+
+[pose]
+interact = false
+lay_rest = true
+lay_night_skip = true
+lay_snoring_sounds = false
+lay_snoring_night_only = true
+
+[crawl]
+get_up_sneak = true
+corridor_crawl = true
+double_sneak = false
+double_sneak_pitch = 75
+double_sneak_time_ms = 400
+layers = 1
+default_enabled = true
