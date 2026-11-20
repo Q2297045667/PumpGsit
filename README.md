@@ -4,7 +4,7 @@ PumpGsit 将 GSit 3.8.0 的坐下、玩家叠坐、仰卧、翘腿、俯卧、�
 
 ## 下载与安装
 
-1. 从 **v0.1.3 正式版**或所需日期的每夜版下载 `PumpGsit.wasm` 和 `SHA256SUMS`，在下载目录执行 `sha256sum -c SHA256SUMS`，确认输出 `PumpGsit.wasm: OK`。每夜版在北京时间每日 02:17 计划构建。[v0.1.3 正式版](https://github.com/Q2297045667/PumpGsit/releases/tag/v0.1.3) · [每夜版](https://github.com/Q2297045667/PumpGsit/releases?q=nightly)
+1. 从最新正式版下载 `PumpGsit.wasm` 和 `SHA256SUMS`。如要测试某次推送的改动，可按提交号选择对应的每夜版。在下载目录执行 `sha256sum -c SHA256SUMS`，确认输出 `PumpGsit.wasm: OK`。[最新正式版](https://github.com/Q2297045667/PumpGsit/releases/latest) · [每夜版](https://github.com/Q2297045667/PumpGsit/releases?q=nightly)
 2. 停服，将 `PumpGsit.wasm` 放入服务端的 `plugins/`。目标 Pumpkin 版本为 `0.2.2+26.3-26.63`（提交 `e318ec5f`），构建服务端时须启用 `plugin-v0_2`。从 Bukkit 或旧名 `pumpgsit`、`gsit` 升级时，先备份并核对数据目录、三项默认值和玩家权限。[旧服迁移与回滚](doc/存储.md)
 3. 在服务端的 `pumpkin.toml` 中允许加载此未签名组件，并开放插件数据目录。
 

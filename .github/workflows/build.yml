@@ -3,16 +3,12 @@ name: Build
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
   workflow_call:
-    outputs:
-      release_tag:
-        description: Stable tag or UTC-dated nightly tag
-        value: ${{ jobs.wasm.outputs.release_tag }}
-      plugin_version:
-        description: Version embedded in the component metadata
-        value: ${{ jobs.wasm.outputs.plugin_version }}
+    inputs:
+      channel:
+        description: Publish a stable release or a nightly prerelease
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -22,6 +18,9 @@ jobs:
   wasm:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
     outputs:
       release_tag: ${{ steps.version.outputs.release_tag }}
       plugin_version: ${{ steps.version.outputs.plugin_version }}
@@ -35,23 +34,29 @@ jobs:
       - name: Resolve the package version and release tag
         id: version
         env:
+          BUILD_CHANNEL: ${{ inputs.channel }}
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
           tag=""
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            tag="$GITHUB_REF_NAME"
-            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || "$tag" != "v$version" ]]; then
-              echo "::error::The stable tag must be vMAJOR.MINOR.PATCH and match the Cargo.toml version ($version)."
-              exit 1
-            fi
-          elif [[ "$GITHUB_EVENT_NAME" == schedule || "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
-            # Reruns keep their original UTC date and source commit.
-            day=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq '.created_at[:10]')
-            tag="nightly-$day-${GITHUB_SHA:0:12}"
-            version="$version-nightly.${day//-/}+${GITHUB_SHA:0:12}"
-            echo "PUMPGSIT_BUILD_VERSION=$version" >> "$GITHUB_ENV"
-          fi
+          case "$BUILD_CHANNEL" in
+            release)
+              if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::Stable releases require a MAJOR.MINOR.PATCH version in Cargo.toml."
+                exit 1
+              fi
+              tag="v$version"
+              ;;
+            nightly)
+              # Reruns use the creation date of the original run.
+              day=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq '.created_at[:10]')
+              tag="nightly-$day-${GITHUB_SHA:0:12}"
+              version="$version-nightly.${day//-/}+${GITHUB_SHA:0:12}"
+              echo "PUMPGSIT_BUILD_VERSION=$version" >> "$GITHUB_ENV"
+              ;;
+            "") ;; # Pull requests only build and validate the component.
+            *) echo "::error::Unknown build channel: $BUILD_CHANNEL"; exit 1 ;;
+          esac
           echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
           echo "plugin_version=$version" >> "$GITHUB_OUTPUT"
 
@@ -88,3 +93,27 @@ jobs:
             target/release-assets/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
+
+  publish:
+    if: inputs.channel == 'release' || inputs.channel == 'nightly'
+    needs: wasm
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: PumpGsit
+          path: release-assets
+      - name: Publish the verified build
+        env:
+          BUILD_CHANNEL: ${{ inputs.channel }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.wasm.outputs.release_tag }}
+          PLUGIN_VERSION: ${{ needs.wasm.outputs.plugin_version }}
+        run: bash .github/scripts/publish.sh
