@@ -166,3 +166,74 @@ fn translate_tags(node: &mut Value) {
         node["extra"] = Value::Array(parts);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// Reloading a partial translation preserves the edited file and fills missing keys in memory.
+    #[test]
+    fn editable_catalogs_override_bundled_keys_without_rewriting_files() {
+        let data = tempdir().unwrap();
+        let bundled = read(data.path()).unwrap();
+        let lang = data.path().join("lang");
+        let english_path = lang.join("en_us.yml");
+        let override_yaml = "Messages:\n  action-sit-info: 'Press your sneak key.'\n";
+        fs::write(&english_path, override_yaml).unwrap();
+        fs::write(lang.join("fr-CA.yml"), "PumpGsit:\n  help: 'Aide locale'\n").unwrap();
+
+        let loaded = read(data.path()).unwrap();
+        assert_eq!(loaded["en_us"]["action-sit-info"], "Press your sneak key.");
+        assert_eq!(
+            loaded["en_us"]["plugin-prefix"],
+            bundled["en_us"]["plugin-prefix"]
+        );
+        assert_eq!(loaded["fr_ca"]["help"], "Aide locale");
+        assert_eq!(fs::read_to_string(english_path).unwrap(), override_yaml);
+    }
+
+    /// A malformed custom catalog fails with the filename needed to fix the reload.
+    #[test]
+    fn invalid_translation_names_the_offending_file() {
+        let data = tempdir().unwrap();
+        let lang = data.path().join("lang");
+        fs::create_dir(&lang).unwrap();
+        let path = lang.join("zh_cn.yml");
+        fs::write(&path, "Messages: [invalid").unwrap();
+        let error = read(data.path()).unwrap_err();
+        assert!(
+            error.starts_with(&format!("{}:", path.display())),
+            "{error}"
+        );
+    }
+
+    /// Inline translations precede existing children, inherit their run's styling and leave unfinished tags literal.
+    #[test]
+    fn language_tags_preserve_styled_children_and_unclosed_text() {
+        let mut component = json!({
+            "text": "按 <lang:key.sneak> / <lang:key.jump>，<lang:unfinished",
+            "color": "gold",
+            "extra": [
+                {"text": "[<lang:key.left>]", "bold": true},
+                {"text": "<lang:incomplete"}
+            ]
+        });
+        translate_tags(&mut component);
+        assert_eq!(
+            component,
+            json!({
+                "text": "",
+                "color": "gold",
+                "extra": [
+                    {"text": "按 "}, {"translate": "key.sneak"}, {"text": " / "},
+                    {"translate": "key.jump"}, {"text": "，<lang:unfinished"},
+                    {"text": "", "bold": true, "extra": [
+                        {"text": "["}, {"translate": "key.left"}, {"text": "]"}
+                    ]},
+                    {"text": "<lang:incomplete"}
+                ]
+            })
+        );
+    }
+}

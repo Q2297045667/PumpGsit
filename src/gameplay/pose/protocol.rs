@@ -96,3 +96,58 @@ pub(super) fn swing(client: &JavaPlayer, entity: u32, off_hand: bool) {
     out.extend_from_slice(&[u8::from(off_hand), 1, 6]);
     client.send_raw_packet(123, &out);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Entity IDs use seven payload bits per VarInt byte, including the fifth byte at the u32 limit.
+    #[test]
+    fn varints_match_java_packet_boundaries() {
+        for (value, expected) in [
+            (0, &[0x00][..]),
+            (127, &[0x7f]),
+            (128, &[0x80, 0x01]),
+            (16_383, &[0xff, 0x7f]),
+            (16_384, &[0x80, 0x80, 0x01]),
+            (u32::MAX, &[0xff, 0xff, 0xff, 0xff, 0x0f]),
+        ] {
+            let mut bytes = Vec::new();
+            varint(&mut bytes, value);
+            assert_eq!(bytes, expected, "{value}");
+        }
+    }
+
+    /// The string prefix counts UTF-8 bytes and expands when their length crosses 127.
+    #[test]
+    fn profile_strings_prefix_the_utf8_byte_count() {
+        let mut bytes = Vec::new();
+        string(&mut bytes, "");
+        string(&mut bytes, "猫🪑");
+        assert_eq!(bytes, [0, 7, 0xe7, 0x8c, 0xab, 0xf0, 0x9f, 0xaa, 0x91]);
+
+        let value = "é".repeat(64);
+        bytes.clear();
+        string(&mut bytes, &value);
+        assert_eq!(&bytes[..2], &[0x80, 0x01]);
+        assert_eq!(&bytes[2..], value.as_bytes());
+    }
+
+    /// Java block positions pack signed X/Z/Y fields into 26/26/12 bits in network byte order.
+    #[test]
+    fn sleeping_positions_encode_signed_coordinate_limits() {
+        for ((x, y, z), packed) in [
+            ((0, 0, 0), 0_u64),
+            ((-1, -1, -1), u64::MAX),
+            ((1, -1, -1), 0x0000_007f_ffff_ffff),
+            ((-33_554_432, -2_048, 33_554_431), 0x8000_001f_ffff_f800),
+            ((33_554_431, 2_047, -33_554_432), 0x7fff_ffe0_0000_07ff),
+        ] {
+            assert_eq!(
+                packed_position(BlockPos { x, y, z }),
+                packed.to_be_bytes(),
+                "({x}, {y}, {z})"
+            );
+        }
+    }
+}

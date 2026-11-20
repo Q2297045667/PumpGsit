@@ -26,6 +26,39 @@ permissions:
   actions: read
 
 jobs:
+  checks:
+    name: Lint and run Rust unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      RUSTUP_TOOLCHAIN: 1.100.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust with rustfmt and Clippy
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt,clippy
+
+      - name: Install actionlint and shfmt
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir lint-tools
+          curl -fsSL --retry 3 -o actionlint.tar.gz https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          curl -fsSL --retry 3 -o lint-tools/shfmt https://github.com/mvdan/sh/releases/download/v3.14.1/shfmt_v3.14.1_linux_amd64
+          sha256sum -c <<'CHECKSUMS'
+          8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz
+          76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf  lint-tools/shfmt
+          CHECKSUMS
+          tar -xzf actionlint.tar.gz -C lint-tools actionlint
+          chmod +x lint-tools/shfmt
+          echo "$RUNNER_TEMP/lint-tools" >> "$GITHUB_PATH"
+
+      - name: Check formatting, scripts, workflows and host tests
+        run: bash .github/scripts/check.sh
+
   wasm:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -113,7 +146,7 @@ jobs:
 
   publish:
     if: inputs.channel == 'release' || inputs.channel == 'nightly'
-    needs: wasm
+    needs: [checks, wasm]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

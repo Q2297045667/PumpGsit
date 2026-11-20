@@ -722,3 +722,48 @@ pub async fn before_teleport(player: &Player, server: &Server) -> bool {
     }
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{reserve, stair_offset};
+
+    /// A pending stack mount reserves each player across worlds until its admission is dropped.
+    #[test]
+    fn stack_admission_releases_only_its_own_player() {
+        let rider = reserve(91, "overworld", None).unwrap();
+        let passenger = reserve(92, "overworld", None).unwrap();
+        assert_eq!(reserve(91, "the_nether", None).err(), Some("occupied"));
+
+        drop(rider);
+        let _retry = reserve(91, "the_nether", None).unwrap();
+        assert_eq!(reserve(92, "overworld", None).err(), Some("occupied"));
+        drop(passenger);
+        assert!(reserve(92, "overworld", None).is_ok());
+    }
+
+    /// Straight stairs face the open side and left and right corners turn the seat diagonally.
+    #[test]
+    fn stair_seat_offsets_and_yaw_follow_the_open_side() {
+        for (facing, shape, x, z, yaw) in [
+            ("north", "straight", 0.0, 0.123, 0.0),
+            ("south", "straight", 0.0, -0.123, 180.0),
+            ("east", "straight", -0.123, 0.0, 90.0),
+            ("west", "straight", 0.123, 0.0, 270.0),
+            ("north", "inner_left", 0.123, 0.123, 315.0),
+            ("north", "outer_left", 0.123, 0.123, 315.0),
+            ("east", "inner_right", -0.123, -0.123, 135.0),
+            ("east", "outer_right", -0.123, -0.123, 135.0),
+        ] {
+            let props = [
+                ("shape".into(), shape.into()),
+                ("facing".into(), facing.into()),
+            ];
+            let (dx, dz, angle) = stair_offset(&props);
+            assert_eq!(
+                (dx, dz, angle.rem_euclid(360.0)),
+                (x, z, yaw),
+                "{facing} {shape}"
+            );
+        }
+    }
+}

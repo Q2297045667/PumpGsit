@@ -28,7 +28,7 @@ request() {
 # Accept a successful Studio response and show the API error on a failed operation.
 require_success() {
     if [[ $http_status != 2?? ]]; then
-        fail "Pumpkin Market $1 returned HTTP $http_status $(jq -c '.error // .message // empty' "$response" 2>/dev/null || true)"
+        fail "Pumpkin Market $1 returned HTTP $http_status $(jq -c '.error // .message // empty' "$response" 2> /dev/null || true)"
     fi
 }
 
@@ -46,10 +46,10 @@ read_listing() {
         listing=$(cat "$response")
     fi
     jq -e --arg id "$MARKET_PLUGIN_ID" '(.id | tostring) == $id and .name == "PumpGsit"' \
-        <<< "$listing" >/dev/null || fail 'The configured Market listing does not identify PumpGsit.'
+        <<< "$listing" > /dev/null || fail 'The configured Market listing does not identify PumpGsit.'
     status=$(jq -er '.status' <<< "$listing")
     case $status in
-        draft|rejected|under_review|published) ;;
+        draft | rejected | under_review | published) ;;
         *) fail "Unknown Pumpkin Market listing status: $status" ;;
     esac
 }
@@ -66,7 +66,7 @@ case ${1:-} in
         current=$(jq -r '.version // empty' <<< "$listing")
         if [[ $versions != '[]' || $current == "$PLUGIN_VERSION" ]]; then
             jq -e --arg notes "$notes" 'length == 1 and .[0].track == "stable" and .[0].release_notes == $notes' \
-                <<< "$versions" >/dev/null || fail 'This version already exists. Its release source could not be confirmed.'
+                <<< "$versions" > /dev/null || fail 'This version already exists. Its release source could not be confirmed.'
             [[ $status == published || $current == "$PLUGIN_VERSION" ]] || fail 'The listing now has a different version awaiting publication.'
             echo 'The same stable GitHub release has already been uploaded.'
         else
@@ -86,7 +86,7 @@ case ${1:-} in
         fi
         echo "Pumpkin Market listing $MARKET_PLUGIN_ID: $PLUGIN_VERSION (status: $status)."
         case $status in
-            draft|rejected) needs_review=true ;;
+            draft | rejected) needs_review=true ;;
             *) needs_review=false ;;
         esac
         printf 'needs_review=%s\nplugin_id=%s\n' "$needs_review" "$MARKET_PLUGIN_ID" >> "$GITHUB_OUTPUT"
@@ -96,12 +96,12 @@ case ${1:-} in
         request GET "$plugin_url/readiness"
         require_success 'readiness check'
         jq -e --arg v "$PLUGIN_VERSION" '.binaryReady == true and .binaryVersion == $v' \
-            "$response" >/dev/null || fail 'The current Market binary does not match the version from the upload job.'
+            "$response" > /dev/null || fail 'The current Market binary does not match the version from the upload job.'
         if [[ $status == under_review || $status == published ]]; then
             echo "Market already reports this version as $status."
             exit 0
         fi
-        jq -e '.canPublish == true' "$response" >/dev/null || \
+        jq -e '.canPublish == true' "$response" > /dev/null ||
             fail "Complete the listing in Studio, then re-run the failed review job: $(jq -c '.missingRequirements' "$response")"
         request POST "$plugin_url/publish"
         require_success 'review submission'

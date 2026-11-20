@@ -263,3 +263,156 @@ pub fn read(dir: &Path) -> Result<Config, String> {
     }
     Ok(cfg)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// Loads the packaged defaults as editable TOML so each case changes only the setting it exercises.
+    fn defaults() -> toml::Table {
+        include_str!("../assets/config.toml").parse().unwrap()
+    }
+
+    /// Reads an isolated file through the same configuration loader used on startup and reload.
+    fn read_text(contents: &str) -> Result<Config, String> {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("config.toml"), contents).unwrap();
+        read(dir.path())
+    }
+
+    /// Both new installations and configurations predating backend selection use GSit's original file.
+    #[test]
+    fn new_and_legacy_configs_use_the_original_sqlite_path() {
+        let dir = tempdir().unwrap();
+        let fresh = read(dir.path()).unwrap();
+        assert!(dir.path().join("config.toml").is_file());
+
+        let mut legacy = defaults();
+        legacy.remove("database");
+        let previous = read_text(&toml::to_string(&legacy).unwrap()).unwrap();
+        for config in [fresh, previous] {
+            assert!(
+                matches!(config.database, Database::Sqlite { path } if path == Path::new("data/data.db"))
+            );
+        }
+    }
+
+    /// Operators may nest SQLite files under the data directory but cannot select a parent or root path.
+    #[test]
+    fn sqlite_paths_are_relative_to_plugin_data() {
+        let mut settings = defaults();
+        for path in ["", ".", "../old.db", "data/../old.db", "/outside/data.db"] {
+            settings["database"]["path"] = path.into();
+            let result = read_text(&toml::to_string(&settings).unwrap());
+            assert!(result.err().unwrap().contains("database.path"), "{path:?}");
+        }
+        settings["database"]["path"] = "legacy/data.db".into();
+        let config = read_text(&toml::to_string(&settings).unwrap()).unwrap();
+        assert!(
+            matches!(config.database, Database::Sqlite { path } if path == Path::new("legacy/data.db"))
+        );
+    }
+
+    /// A migrated MySQL configuration defaults to port 3306 with server identity verification.
+    #[test]
+    fn mysql_defaults_and_ca_file_are_validated_together() {
+        let mut settings = defaults();
+        let mysql: toml::Table = r#"
+            type = "mysql"
+            host = "db.example"
+            database = "gsit"
+            user = "plugin"
+            password = ""
+            ca_file = "certs/ca.pem"
+        "#
+        .parse()
+        .unwrap();
+        settings["database"] = mysql.into();
+        let config = read_text(&toml::to_string(&settings).unwrap()).unwrap();
+        let Database::Mysql(connection) = config.database else {
+            panic!("expected MySQL")
+        };
+        assert_eq!(connection.port, 3306);
+        assert!(connection.tls == TlsMode::VerifyIdentity);
+        assert_eq!(connection.ca_file.as_deref(), Some("certs/ca.pem"));
+
+        for (mode, path) in [
+            ("disabled", "certs/ca.pem"),
+            ("verify_identity", "../ca.pem"),
+        ] {
+            let database = settings["database"].as_table_mut().unwrap();
+            database.insert("tls".into(), mode.into());
+            database["ca_file"] = path.into();
+            let result = read_text(&toml::to_string(&settings).unwrap());
+            assert!(
+                result.err().unwrap().contains("database.ca_file"),
+                "{mode} {path}"
+            );
+        }
+    }
+
+    /// Invalid rules are skipped individually and both accepted offset spellings preserve the same state.
+    #[test]
+    fn material_rules_preserve_offsets_and_skip_only_bad_entries() {
+        let mut settings = defaults();
+        settings["sit"]["materials"] = vec![
+            "#SLABS",
+            "oak_slab[type=]",
+            "OAK_STAIRS;-0.125[Half=Bottom,Facing=NORTH]",
+            "oak_stairs[half=bottom,half=top]",
+            "oak_slab;NaN",
+            "oak_stairs[half=bottom,facing=north];-0.125",
+        ]
+        .into();
+        let config = read_text(&toml::to_string(&settings).unwrap()).unwrap();
+        let [tag, prefix, suffix] = config.sit.materials.as_slice() else {
+            panic!("expected only the tag and the two valid state rules")
+        };
+        assert_eq!(tag.name, "#slabs");
+        assert!(tag.properties.is_none());
+        assert_eq!(tag.offset, 0.0);
+        let properties = vec![
+            ("half".into(), "bottom".into()),
+            ("facing".into(), "north".into()),
+        ];
+        for rule in [prefix, suffix] {
+            assert_eq!(rule.name, "oak_stairs");
+            assert_eq!(rule.properties.as_ref(), Some(&properties));
+            assert_eq!(rule.offset, -0.125);
+        }
+    }
+
+    /// Invalid gameplay bounds are rejected before a candidate configuration becomes active.
+    #[test]
+    fn distances_pitch_and_layers_reject_invalid_values() {
+        for (section, key, value) in [
+            ("sit", "max_distance", (-0.25).into()),
+            ("player_sit", "max_distance", f64::INFINITY.into()),
+            ("crawl", "double_sneak_pitch", 91.into()),
+            ("crawl", "layers", 0.into()),
+        ] {
+            let mut settings = defaults();
+            settings[section][key] = value;
+            let result = read_text(&toml::to_string(&settings).unwrap());
+            assert!(
+                result
+                    .err()
+                    .unwrap()
+                    .contains("invalid distance, double_sneak_pitch or layers"),
+                "{section}.{key}"
+            );
+        }
+    }
+
+    /// A malformed password line reports its location without echoing its contents into server logs.
+    #[test]
+    fn toml_errors_omit_credential_values() {
+        let result =
+            read_text("[database]\ntype = \"mysql\"\npassword = 'sensitive-value' trailing");
+        assert_eq!(
+            result.err().unwrap(),
+            "config.toml: invalid configuration near line 3"
+        );
+    }
+}

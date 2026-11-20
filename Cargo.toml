@@ -21,3 +21,6 @@ serde_yaml_ng = "0.10"
 toml = "1.1"
 uuid = "1"
 wit-bindgen = { version = "=0.63.0", default-features = false, features = ["async", "macros", "std", "bitflags", "realloc"] }
+
+[dev-dependencies]
+tempfile = { version = "3", default-features = false }

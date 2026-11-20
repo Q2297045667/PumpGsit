@@ -30,7 +30,10 @@ case "$BUILD_CHANNEL" in
         prerelease=true
         channel+=(--prerelease --latest=false)
         ;;
-    *) echo "Unknown publication channel: $BUILD_CHANNEL" >&2; exit 1 ;;
+    *)
+        echo "Unknown publication channel: $BUILD_CHANNEL" >&2
+        exit 1
+        ;;
 esac
 repo_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
 {
@@ -42,7 +45,7 @@ repo_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
 } > "$notes"
 
 # A draft can exist before GitHub creates its tag. Verify its target before any write.
-if release=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,targetCommitish 2>"$RUNNER_TEMP/release-view.err"); then
+if release=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,targetCommitish 2> "$RUNNER_TEMP/release-view.err"); then
     draft=$(jq -r .isDraft <<< "$release")
     [[ "$(jq -r .isPrerelease <<< "$release")" == "$prerelease" ]]
     if [[ "$draft" == true && "$(jq -r .targetCommitish <<< "$release")" != "$GITHUB_SHA" ]]; then
