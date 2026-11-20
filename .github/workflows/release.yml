@@ -2,6 +2,16 @@ name: Releases
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: '正式版版本号，例如 0.1.4 或 v0.1.4'
+        required: true
+        type: string
+      publish_to_market:
+        description: '同时发布到 Pumpkin Market 插件商店'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,3 +29,48 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       channel: release
+      version: ${{ inputs.version }}
+
+  market_upload:
+    name: Upload the GitHub release to Pumpkin Market
+    if: inputs.publish_to_market
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      needs_review: ${{ steps.upload.outputs.needs_review }}
+      plugin_id: ${{ steps.upload.outputs.plugin_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the published release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
+        run: gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-assets --pattern PumpGsit.wasm --pattern SHA256SUMS
+      - name: Verify and upload the stable component
+        id: upload
+        env:
+          MARKET_TOKEN: ${{ secrets.Pumpkin_Market_Token }}
+          MARKET_PLUGIN_ID: ${{ vars.PUMPKIN_MARKET_PLUGIN_ID }}
+          RELEASE_TAG: ${{ needs.release.outputs.release_tag }}
+          PLUGIN_VERSION: ${{ needs.release.outputs.plugin_version }}
+        run: bash .github/scripts/publish-market.sh upload
+
+  market_review:
+    name: Submit the Market listing for review
+    needs: [release, market_upload]
+    if: needs.market_upload.outputs.needs_review == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check listing requirements and submit
+        env:
+          MARKET_TOKEN: ${{ secrets.Pumpkin_Market_Token }}
+          MARKET_PLUGIN_ID: ${{ needs.market_upload.outputs.plugin_id }}
+          PLUGIN_VERSION: ${{ needs.release.outputs.plugin_version }}
+        run: bash .github/scripts/publish-market.sh review
