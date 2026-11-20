@@ -86,8 +86,8 @@ def check_pie(command, root, run, player, expected):
     raise AssertionError(f"{log}: expected Read={value}")
 
 
-def exercise(args, root):
-    """Create data on Paper, modify on Pumpkin, restart, roll back and restore the original backup."""
+def prepare_servers(args, root):
+    """Stage a disposable Paper server and Pumpkin plugins for a database round trip."""
     java, wasm = root / "paper", root / "pumpkin"
     (java / "plugins").mkdir(parents=True)
     (wasm / "plugins").mkdir(parents=True)
@@ -104,6 +104,12 @@ def exercise(args, root):
     (java / "server.properties").write_text(f"server-ip=127.0.0.1\nserver-port={port}\nonline-mode=false\n"
         "enable-status=false\nview-distance=2\nsimulation-distance=2\nlevel-type=minecraft:flat\n"
         'generator-settings={"layers":[{"block":"minecraft:stone","height":1}],"biome":"minecraft:plains"}\n')
+    return java, wasm
+
+
+def exercise(args, root):
+    """Create data on Paper, modify on Pumpkin, restart, roll back and restore the original backup."""
+    java, wasm = prepare_servers(args, root)
     original = (False, True, False)
     changed = (True, False, True)
     all_off = (False,) * 3

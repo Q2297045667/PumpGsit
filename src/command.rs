@@ -237,14 +237,15 @@ fn preferences(
 ) -> Result<&'static str, &'static str> {
     let dir = data_dir();
     let key = uuid::to_string(target);
-    let default = preferences::default_for(pref);
+    let cfg = config();
+    let default = preferences::default_for(&cfg, pref);
     let change = || -> Result<bool, String> {
         let value = match mode {
             Some(mode) if mode.eq_ignore_ascii_case("on") => true,
             Some(mode) if mode.eq_ignore_ascii_case("off") => false,
-            _ => !storage::enabled(&dir, pref, &key, default)?,
+            _ => !storage::enabled(&cfg.database, &dir, pref, &key, default)?,
         };
-        storage::set_enabled(&dir, pref, &key, default, value)?;
+        storage::set_enabled(&cfg.database, &dir, pref, &key, default, value)?;
         preferences::forget(target);
         Ok(value)
     };

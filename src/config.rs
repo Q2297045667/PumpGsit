@@ -1,10 +1,16 @@
 //! The on-disk TOML mirrors the upstream gameplay settings.
 use serde::{Deserialize, Deserializer};
-use std::{fs, io::ErrorKind, path::Path};
+use std::{
+    fs,
+    io::ErrorKind,
+    path::{Component, Path, PathBuf},
+};
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub database: Database,
     pub language: String,
     pub client_language: bool,
     pub get_up_damage: bool,
@@ -24,6 +30,103 @@ pub struct Config {
     pub player_sit: PlayerSit,
     pub pose: Pose,
     pub crawl: Crawl,
+}
+
+/// Connection settings selected by the operator. Old configurations use the original SQLite file.
+#[derive(Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+pub enum Database {
+    Sqlite {
+        #[serde(default = "legacy_sqlite_path")]
+        path: PathBuf,
+    },
+    Mysql(MySqlConfig),
+}
+
+/// Returns the same relative path used by earlier PumpGsit releases.
+fn legacy_sqlite_path() -> PathBuf {
+    "data/data.db".into()
+}
+
+impl Default for Database {
+    /// Selects SQLite when an existing configuration predates backend selection.
+    fn default() -> Self {
+        Self::Sqlite {
+            path: legacy_sqlite_path(),
+        }
+    }
+}
+
+/// MySQL authenticates the server and verifies the host name unless explicitly disabled.
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TlsMode {
+    #[default]
+    VerifyIdentity,
+    Disabled,
+}
+
+/// Credentials and destination for direct access to GSit's tables.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MySqlConfig {
+    pub host: String,
+    #[serde(default = "mysql_port")]
+    pub port: u16,
+    pub database: String,
+    pub user: String,
+    pub password: String,
+    #[serde(default)]
+    pub tls: TlsMode,
+    pub ca_file: Option<String>,
+}
+
+/// Returns the standard MySQL TCP port when the configuration omits it.
+fn mysql_port() -> u16 {
+    3306
+}
+
+/// Checks that the path names a file below the WASI plugin data directory.
+fn data_file(path: &Path) -> bool {
+    path.file_name().is_some()
+        && path
+            .components()
+            .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
+}
+
+impl Database {
+    /// Validates the candidate before changing a live backend or opening files or sockets.
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::Sqlite { path } if !data_file(path) => Err(
+                "config.toml: database.path must name a file inside the plugin data directory"
+                    .into(),
+            ),
+            Self::Mysql(cfg) => {
+                if cfg.host.trim().is_empty()
+                    || cfg.database.trim().is_empty()
+                    || cfg.user.trim().is_empty()
+                    || cfg.port == 0
+                    || [&cfg.host, &cfg.database, &cfg.user]
+                        .iter()
+                        .any(|field| field.contains('\0'))
+                {
+                    return Err(
+                        "config.toml: MySQL requires host, nonzero port, database and user".into(),
+                    );
+                }
+                if cfg
+                    .ca_file
+                    .as_ref()
+                    .is_some_and(|path| cfg.tls == TlsMode::Disabled || !data_file(Path::new(path)))
+                {
+                    return Err("config.toml: database.ca_file requires TLS and a file inside the plugin data directory".into());
+                }
+                Ok(())
+            }
+            Self::Sqlite { .. } => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -137,7 +240,19 @@ pub fn read(dir: &Path) -> Result<Config, String> {
         }
         Err(error) => return Err(format!("{}: {error}", path.display())),
     };
-    let cfg: Config = toml::from_str(&contents).map_err(|error| format!("config.toml: {error}"))?;
+    // TOML's formatted errors quote source lines, which can contain the database password.
+    let cfg: Config = toml::from_str(&contents).map_err(|error| {
+        let offset = error
+            .span()
+            .map_or(0, |span| span.start)
+            .min(contents.len());
+        let line = 1 + contents.as_bytes()[..offset]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count();
+        format!("config.toml: invalid configuration near line {line}")
+    })?;
+    cfg.database.validate()?;
     if [cfg.sit.max_distance, cfg.player_sit.max_distance]
         .iter()
         .any(|n| !n.is_finite() || *n < 0.0)

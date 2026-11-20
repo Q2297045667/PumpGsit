@@ -67,7 +67,9 @@ def check_upgrade(args, root, config):
     """Move a stopped server's lowercase data directory and verify its configuration and SQLite preferences."""
     old_data = root / "plugins/data/pumpgsit"
     (old_data / "data").mkdir(parents=True)
-    shutil.copyfile(config, old_data / "config.toml")
+    # An old installation has no database section and must reopen its original data.db.
+    legacy_config = config.read_text().split("\n[database]\n", 1)[0]
+    (old_data / "config.toml").write_text(legacy_config)
     shutil.copyfile(LEGACY_DB, old_data / "data/data.db")
     # A distinct intermediate name also works on case-insensitive filesystems.
     staging = old_data.rename(old_data.with_name("rename-in-progress"))
@@ -82,7 +84,17 @@ def check_upgrade(args, root, config):
         assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
     with boot(args.server, args.component, root, "post-upgrade") as cmd:
         cmd(f"sit toggle {old_uuid}", "你不能通过右键坐下了")
+        config_file = data / "config.toml"
+        custom = legacy_config + '\n[database]\ntype = "sqlite"\npath = "new/preferences.db"\n'
+        config_file.write_text(custom)
+        cmd("gsitreload", "插件已成功重载")
+        cmd(f"sit toggle {old_uuid}", "你不能通过右键坐下了")
+        config_file.write_text(custom.replace("new/preferences.db", "../escaped.db"))
+        cmd("gsitreload", "之前的设置仍然生效")
+        cmd(f"sit toggle {old_uuid}", "你可以通过右键坐下了")
     assert row_count(db, old_uuid) == 1
+    assert row_count(data / "new/preferences.db", old_uuid) == 0
+    assert not (data.parent / "escaped.db").exists()
     assert {entry.name for entry in data.parent.iterdir()} == {"PumpGsit"}
 
 

@@ -121,11 +121,13 @@ fn resolve(callback: &Callback) -> Option<bool> {
     if let Some(player) = player {
         return Some(preferences::enabled(&player, preference));
     }
+    let cfg = crate::config();
     let value = storage::enabled(
+        &cfg.database,
         &data_dir(),
         preference,
         &uuid::to_string(id),
-        preferences::default_for(preference),
+        preferences::default_for(&cfg, preference),
     );
     Some(preferences::legacy_read(value))
 }

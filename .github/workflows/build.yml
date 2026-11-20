@@ -79,6 +79,7 @@ jobs:
             echo "WASI_SYSROOT=$RUNNER_TEMP/wasi-sdk/share/wasi-sysroot"
             echo "CC_wasm32_wasip3=$RUNNER_TEMP/wasi-sdk/bin/wasm32-wasip3-clang"
             echo "AR_wasm32_wasip3=$RUNNER_TEMP/wasi-sdk/bin/llvm-ar"
+            echo "CXX_wasm32_wasip3=$RUNNER_TEMP/wasi-sdk/bin/wasm32-wasip3-clang++"
           } >> "$GITHUB_ENV"
           echo "$RUNNER_TEMP/wasm-tools" >> "$GITHUB_PATH"
 

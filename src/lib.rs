@@ -81,7 +81,7 @@ fn hint(player: &Player, key: &str) {
 async fn reload(server: &Server) -> Result<(), String> {
     let config = config::read(&data_dir())?;
     let translations = language::read(&data_dir())?;
-    storage::initialize(&data_dir())?;
+    storage::initialize(&config.database, &data_dir())?;
     gameplay::cleanup_all(server).await;
     preferences::clear();
     language::install(translations, &config.language);
@@ -100,7 +100,12 @@ impl exports::pumpkin::plugin::metadata::Guest for PumpGsit {
             authors: vec!["PumpGsit contributors (based on GSit by Gecolay)".into()],
             description: env!("CARGO_PKG_DESCRIPTION").into(),
             dependencies: vec![],
-            permissions: vec!["fs.read.data".into(), "fs.write.data".into()],
+            permissions: vec![
+                "fs.read.data".into(),
+                "fs.write.data".into(),
+                "network.tcp.connect".into(),
+                "network.dns".into(),
+            ],
         }
     }
 }
@@ -111,7 +116,7 @@ impl Guest for PumpGsit {
     async fn on_load(ctx: Context) -> Result<(), String> {
         let dir = PathBuf::from(ctx.get_data_folder());
         let cfg = config::read(&dir)?;
-        storage::initialize(&dir)?;
+        storage::initialize(&cfg.database, &dir)?;
         language::install(language::read(&dir)?, &cfg.language);
         SETTINGS.set(Some(Arc::new(cfg)));
         let ctx = Arc::new(ctx);

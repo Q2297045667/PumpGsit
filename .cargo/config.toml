@@ -1,2 +1,6 @@
 [build]
 target = "wasm32-wasip3"
+
+# The MySQL protocol crate supplies WASI 0.3 entropy for its getrandom dependencies.
+[target.wasm32-wasip3]
+rustflags = ["--cfg", 'getrandom_backend="custom"']

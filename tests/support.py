@@ -1,6 +1,7 @@
 """Shared fixtures and process lifecycle for PumpGsit's real-server tests."""
 
 from contextlib import contextmanager
+import json
 import os
 from pathlib import Path
 import shutil
@@ -31,7 +32,7 @@ def wait_for(process, log, text, offset=0, timeout=45):
 
 
 @contextmanager
-def boot(server, component, root, run, expected=f"Loaded PumpGsit ({VERSION})"):
+def boot(server, component, root, run, expected=f"Loaded PumpGsit ({VERSION})", *, mysql=False):
     """Start the target binary and ensure it unloads plugins and exits at the end."""
     plugins = root / "plugins"
     plugins.mkdir(parents=True, exist_ok=True)
@@ -40,6 +41,8 @@ def boot(server, component, root, run, expected=f"Loaded PumpGsit ({VERSION})"):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
+    network = ["network.tcp.connect", "network.dns"]
+    allowed = ["fs.read.data", "fs.write.data"] + (network if mysql else [])
     (root / "pumpkin.toml").write_text(f'''allow_nether = false
 allow_end = false
 [networking.java]
@@ -67,7 +70,8 @@ allow_unsigned = false
 allow_unsigned = true
 [plugins.overrides.PumpGsit]
 allow_unsigned = true
-allowed_permissions = ["fs.read.data", "fs.write.data"]
+allowed_permissions = {json.dumps(allowed)}
+blocked_permissions = {json.dumps([] if mysql else network)}
 ''')
     log = root / f"smoke-{run}.log"
     with log.open("w") as out:

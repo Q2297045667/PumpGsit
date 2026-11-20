@@ -13,6 +13,8 @@ wasm-tools validate --features all "$component"
 wit="$target_dir/PumpGsit.component.wit"
 wasm-tools component wit "$component" > "$wit"
 grep -E '^  import wasi:filesystem/types@0\.3\.[0-9]+;' "$wit"
+grep -E '^  import wasi:sockets/types@0\.3\.[0-9]+;' "$wit"
+grep -E '^  import wasi:sockets/ip-name-lookup@0\.3\.[0-9]+;' "$wit"
 if grep '^  import wasi:' "$wit" | grep -vE '@0\.3\.[0-9]+;$'; then
     echo 'The component imports a WASI interface outside 0.3.' >&2
     exit 1

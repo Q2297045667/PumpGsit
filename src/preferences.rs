@@ -12,8 +12,7 @@ type Preferences = HashMap<(u64, u64, Preference), bool>;
 static PREFERENCES: LazyLock<State<Preferences>> = LazyLock::new(State::default);
 
 /// Returns the configured default used when the UUID is absent from the legacy table.
-pub(crate) fn default_for(feature: Preference) -> bool {
-    let cfg = config();
+pub(crate) fn default_for(cfg: &crate::config::Config, feature: Preference) -> bool {
     match feature {
         Preference::Sit => cfg.sit.default_enabled,
         Preference::PlayerSit => cfg.player_sit.default_enabled,
@@ -28,13 +27,17 @@ fn online_preference(player: &Player, feature: Preference) -> Result<bool, Strin
     if let Some(value) = PREFERENCES.with_borrow(|p| p.get(&key).copied()) {
         return Ok(value);
     }
+    let cfg = config();
     let value = storage::enabled(
+        &cfg.database,
         &data_dir(),
         feature,
         &uuid::to_string(id),
-        default_for(feature),
+        default_for(&cfg, feature),
     )?;
-    PREFERENCES.with_borrow_mut(|p| p.insert(key, value));
+    if std::sync::Arc::ptr_eq(&cfg, &config()) {
+        PREFERENCES.with_borrow_mut(|p| p.insert(key, value));
+    }
     Ok(value)
 }
 

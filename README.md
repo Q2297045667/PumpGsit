@@ -1,6 +1,6 @@
 # PumpGsit
 
-PumpGsit 将 GSit 3.8.0 的坐下、玩家叠坐、仰卧、翘腿、俯卧、旋转和爬行带到 Pumpkin。插件面向 Minecraft Java 26.3（协议 777），使用 `pumpkin:plugin@0.2.0` 接口，构建目标为 `wasm32-wasip3`。玩家的三项动作偏好可以与原版 GSit 停服交替读写同一份 SQLite 数据库。
+PumpGsit 将 GSit 3.8.0 的坐下、玩家叠坐、仰卧、翘腿、俯卧、旋转和爬行带到 Pumpkin。插件面向 Minecraft Java 26.3（协议 777），使用 `pumpkin:plugin@0.2.0` 接口，构建目标为 `wasm32-wasip3`。玩家的三项动作偏好可沿用原版 GSit 的 SQLite 文件或 MySQL 数据库。已发布的 v0.1.3 正式版支持 SQLite。使用 MySQL 时请选择包含数据库配置功能的每夜版。
 
 ## 下载与安装
 
@@ -12,9 +12,12 @@ PumpGsit 将 GSit 3.8.0 的坐下、玩家叠坐、仰卧、翘腿、俯卧、�
    [plugins.overrides.PumpGsit]
    allow_unsigned = true
    allowed_permissions = ["fs.read.data", "fs.write.data"]
+   blocked_permissions = ["network.tcp.connect", "network.dns"]
    ```
 
-4. 启动后确认控制台出现 `Loaded PumpGsit` 和所装版本号。玩家站在完整方块上执行 `/sit`，在第三人称下可看到屈膝坐姿，按潜行键起身。默认配置、语言文件和偏好库分别位于 `plugins/data/PumpGsit/` 下的 `config.toml`、`lang/` 和 `data/data.db`。
+   上例适用于 SQLite。使用 MySQL 时，将 `network.tcp.connect` 和 `network.dns` 从 `blocked_permissions` 移入 `allowed_permissions`，在插件 `config.toml` 的 `[database]` 中填写连接参数。[MySQL 配置、迁移与回滚](doc/存储.md#mysql-配置与切换)
+
+4. 启动后确认控制台出现 `Loaded PumpGsit` 和所装版本号。玩家站在完整方块上执行 `/sit`，在第三人称下可看到屈膝坐姿，按潜行键起身。默认配置、语言文件和默认 SQLite 库分别位于 `plugins/data/PumpGsit/` 下的 `config.toml`、`lang/` 和 `data/data.db`。
 
 ## 使用与维护
 

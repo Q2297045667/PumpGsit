@@ -44,3 +44,19 @@ double_sneak_pitch = 75
 double_sneak_time_ms = 400
 layers = 1
 default_enabled = true
+
+# Paths are relative to plugins/data/PumpGsit. Older configs without this section use the same SQLite file.
+[database]
+type = "sqlite"
+path = "data/data.db"
+
+# To use an existing GSit MySQL database, replace the entire [database] section with:
+# [database]
+# type = "mysql"
+# host = "db.example.org"
+# port = 3306
+# database = "gsit"
+# user = "gsit"
+# password = "replace-with-your-password"
+# tls = "verify_identity"
+# ca_file = "mysql-ca.pem"  # Optional CA for your server
