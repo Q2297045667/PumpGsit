@@ -12,7 +12,7 @@ type Messages = BTreeMap<String, String>;
 static LOCALES: State<Vec<String>> = State::new(Vec::new());
 
 macro_rules! languages {
-    ($($code:literal),+ $(,)?) => { &[$(($code, include_str!(concat!("../lang/", $code, ".yml")))),+] };
+    ($($code:literal),+ $(,)?) => { &[$(($code, include_str!(concat!("../assets/lang/", $code, ".yml")))),+] };
 }
 
 const BUNDLED: &[(&str, &str)] = languages!(

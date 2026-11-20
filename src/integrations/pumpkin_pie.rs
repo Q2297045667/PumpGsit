@@ -2,10 +2,12 @@
 
 use crate::{
     bindings::pumpkin::plugin::{ipc, uuid},
-    command::default_for,
-    crawl, data_dir,
-    seat::{self, Activity},
-    server,
+    data_dir,
+    gameplay::{
+        crawl,
+        seat::{self, Activity},
+    },
+    preferences, server,
     state::State,
     storage::{self, Preference},
 };
@@ -93,45 +95,39 @@ struct Callback {
 }
 
 /// Resolves an explicit UUID or PIE's online viewer name. Unknown identities keep their token.
-fn resolve(callback: &Callback) -> Result<Option<bool>, String> {
+fn resolve(callback: &Callback) -> Option<bool> {
     if !NAMES.contains(&callback.name.as_str()) {
-        return Ok(None);
+        return None;
     }
     let server = server();
     let (id, player) = if let Some(argument) = &callback.argument {
-        let Some(id) = uuid::parse(argument) else {
-            return Ok(None);
-        };
+        let id = uuid::parse(argument)?;
         (id, server.get_player_by_uuid(id))
-    } else if let Some(viewer) = &callback.viewer {
-        let Some(player) = server.get_player_by_name(viewer) else {
-            return Ok(None);
-        };
-        (player.get_id(), Some(player))
     } else {
-        return Ok(None);
+        let player = server.get_player_by_name(callback.viewer.as_deref()?)?;
+        (player.get_id(), Some(player))
     };
 
     let current = player.as_ref().and_then(seat::activity);
     let preference = match callback.name.as_str() {
-        "crawling" => return Ok(Some(player.as_ref().is_some_and(crawl::active))),
-        "sitting" => return Ok(Some(matches!(current, Some(Activity::Sit)))),
-        "posing" => return Ok(Some(current.is_some_and(Activity::is_pose))),
+        "crawling" => return Some(player.as_ref().is_some_and(crawl::active)),
+        "sitting" => return Some(matches!(current, Some(Activity::Sit))),
+        "posing" => return Some(current.is_some_and(Activity::is_pose)),
         "toggle" => Preference::Sit,
         "playertoggle" => Preference::PlayerSit,
         "crawltoggle" => Preference::Crawl,
-        _ => return Ok(None),
+        _ => return None,
     };
     if let Some(player) = player {
-        return Ok(Some(crate::enabled(&player, preference)));
+        return Some(preferences::enabled(&player, preference));
     }
     let value = storage::enabled(
         &data_dir(),
         preference,
         &uuid::to_string(id),
-        default_for(preference),
+        preferences::default_for(preference),
     );
-    Ok(Some(crate::legacy_read(value)))
+    Some(preferences::legacy_read(value))
 }
 
 /// Answers an authenticated PIE callback, declining missing viewers and undeclared names.
@@ -143,8 +139,7 @@ pub fn handle(sender: String, msg: Vec<u8>) -> Result<Vec<u8>, String> {
     if callback.op != "on_request" || callback.namespace != NAMESPACE {
         return Err("expected a gsit on_request callback".into());
     }
-    let value = resolve(&callback)?;
-    let result = match value {
+    let result = match resolve(&callback) {
         Some(value) => json!({"value":value.to_string()}),
         None => json!({}),
     };

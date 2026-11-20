@@ -1,4 +1,5 @@
 //! Real server-side vehicles for block seats and consenting player stacks.
+use super::{crawl, pose};
 use crate::{
     bindings::pumpkin::plugin::{
         common::{BlockPos, GameMode, Hand, Position},
@@ -9,7 +10,7 @@ use crate::{
     },
     config,
     config::MaterialRule,
-    enabled, pose,
+    preferences::enabled,
     state::State,
     storage::Preference,
 };
@@ -216,7 +217,7 @@ pub async fn start(
         || player.is_sneaking()
         || rider.get_vehicle().is_some()
         || player.is_sleeping()
-        || crate::crawl::active(player)
+        || crawl::active(player)
         || (click.is_none() && !rider.is_on_ground())
     {
         return Err("state");
@@ -423,7 +424,7 @@ pub async fn stack(player: &Player, target_id: u32, server: &Server) -> bool {
         || player.is_sleeping()
         || matches!(player.get_gamemode(), GameMode::Spectator)
         || rider.get_vehicle().is_some()
-        || crate::crawl::active(player)
+        || crawl::active(player)
         || (options.empty_hand_only && player.get_item_in_hand(Hand::Right).is_some())
         || !player.has_permission("PumpGsit:playersit".into()).await
         || !allowed(player).await

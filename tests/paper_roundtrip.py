@@ -8,8 +8,7 @@ import sqlite3
 import subprocess
 import tempfile
 
-from pie_smoke import PROVIDER
-from server_smoke import PLAYER, boot, wait_for
+from support import PIE_FILENAME, PLAYER, boot, wait_for
 
 NEW_PLAYER = "22222222-2222-4222-8222-222222222222"
 COMMANDS = ("sit toggle", "sit playertoggle", "crawl toggle")
@@ -93,7 +92,7 @@ def exercise(args, root):
     (java / "plugins").mkdir(parents=True)
     (wasm / "plugins").mkdir(parents=True)
     shutil.copyfile(args.gsit, java / "plugins/GSit.jar")
-    shutil.copyfile(args.pie, wasm / "plugins" / PROVIDER)
+    shutil.copyfile(args.pie, wasm / "plugins" / PIE_FILENAME)
     for name in ("cache", "libraries", "versions"):
         if (args.paper_cache / name).is_dir():
             shutil.copytree(args.paper_cache / name, java / name)

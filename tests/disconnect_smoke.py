@@ -11,7 +11,7 @@ import tomllib
 import uuid
 import zlib
 
-from server_smoke import boot
+from support import boot
 
 
 def varint(value):
@@ -158,7 +158,7 @@ async def logged(log, text):
 
 
 def endpoint(root):
-    """Read the random loopback port selected by server_smoke.boot."""
+    """Read the random loopback port selected by the server harness."""
     address = tomllib.loads((root / "pumpkin.toml").read_text())["networking"]["java"]["address"]
     return int(address.rsplit(":", 1)[1])
 

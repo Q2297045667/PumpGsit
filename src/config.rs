@@ -128,7 +128,7 @@ pub struct Crawl {
 /// Creates the example on first use and parses a complete candidate before a live reload.
 pub fn read(dir: &Path) -> Result<Config, String> {
     let path = dir.join("config.toml");
-    let template = include_str!("../config.toml");
+    let template = include_str!("../assets/config.toml");
     let contents = match fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == ErrorKind::NotFound => {

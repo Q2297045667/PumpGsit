@@ -6,12 +6,11 @@ import shutil
 import tempfile
 import time
 
-from server_smoke import PLAYER, boot
+from support import LEGACY_DB, PIE_FILENAME, PLAYER, boot
 
 NAMES = ("sitting", "posing", "crawling", "toggle", "playertoggle", "crawltoggle")
 BARE = " ".join(f"%gsit_{name}%" for name in NAMES)
 TARGETED = " ".join(f"%gsit_{name}:{PLAYER}%" for name in NAMES)
-PROVIDER = "pumpkin_pie_plugin.wasm"
 ORIGINAL = "false false false false true false"
 MODIFIED = "false false false true true false"
 
@@ -33,11 +32,11 @@ def exercise(server, component, provider, root):
     root.mkdir(parents=True, exist_ok=True)
     data = root / "plugins/data/PumpGsit/data"
     data.mkdir(parents=True)
-    shutil.copyfile(Path(__file__).resolve().parents[1] / "doc/fixtures/gsit-3.8.0.db", data / "data.db")
-    shutil.copyfile(provider, root / PROVIDER)
+    shutil.copyfile(LEGACY_DB, data / "data.db")
+    shutil.copyfile(provider, root / PIE_FILENAME)
     with boot(server, component, root, "PumpGsit-first") as command:
         log = root / "smoke-PumpGsit-first.log"
-        command(f"plugin load {PROVIDER}", "loaded successfully")
+        command(f"plugin load {PIE_FILENAME}", "loaded successfully")
         wait_for_registration(command, log, ORIGINAL)
         command("pie expansions", "%gsit%  from PumpGsit:")
         command(f"pie parse NoViewer={BARE}", f"NoViewer={BARE}")
@@ -46,12 +45,12 @@ def exercise(server, component, provider, root):
         command(f"pie parse Changed={TARGETED}", f"Changed={MODIFIED}")
         command("plugin unload PumpkinPIE", "unloaded successfully")
         command("sit help", "Repeat the current command")
-        command(f"plugin load {PROVIDER}", "loaded successfully")
+        command(f"plugin load {PIE_FILENAME}", "loaded successfully")
         wait_for_registration(command, log, MODIFIED)
 
     # Start with the provider alone, then load PumpGsit into its pre-existing registry.
     (root / "plugins/PumpGsit.wasm").rename(root / "PumpGsit.wasm")
-    shutil.copyfile(provider, root / "plugins" / PROVIDER)
+    shutil.copyfile(provider, root / "plugins" / PIE_FILENAME)
     with boot(server, None, root, "pie-first", expected="Loaded PumpkinPIE (0.2.6)") as command:
         log = root / "smoke-pie-first.log"
         for _ in range(2):

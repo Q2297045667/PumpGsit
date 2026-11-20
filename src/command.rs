@@ -10,9 +10,13 @@ use crate::{
             uuid,
         },
     },
-    config, crawl, data_dir, hint, message,
-    pose::{self, Pose},
-    seat::{self, Activity},
+    config, data_dir,
+    gameplay::{
+        crawl,
+        pose::{self, Pose},
+        seat::{self, Activity},
+    },
+    hint, message, preferences,
     storage::{self, Preference},
 };
 
@@ -165,16 +169,6 @@ pub fn register(ctx: &Context) -> Result<(), String> {
     Ok(())
 }
 
-/// Returns the configured default used when the UUID is absent from the legacy table.
-pub fn default_for(feature: Preference) -> bool {
-    let cfg = config();
-    match feature {
-        Preference::Sit => cfg.sit.default_enabled,
-        Preference::PlayerSit => cfg.player_sit.default_enabled,
-        Preference::Crawl => cfg.crawl.default_enabled,
-    }
-}
-
 /// Matches a preference subcommand with its Bukkit command's case rules.
 fn preference(id: u32, word: &str) -> Option<Preference> {
     match id {
@@ -243,7 +237,7 @@ fn preferences(
 ) -> Result<&'static str, &'static str> {
     let dir = data_dir();
     let key = uuid::to_string(target);
-    let default = default_for(pref);
+    let default = preferences::default_for(pref);
     let change = || -> Result<bool, String> {
         let value = match mode {
             Some(mode) if mode.eq_ignore_ascii_case("on") => true,
@@ -251,7 +245,7 @@ fn preferences(
             _ => !storage::enabled(&dir, pref, &key, default)?,
         };
         storage::set_enabled(&dir, pref, &key, default, value)?;
-        crate::forget_preferences(target);
+        preferences::forget(target);
         Ok(value)
     };
     match change() {

@@ -1,6 +1,6 @@
 [package]
 name = "PumpGsit"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 license = "GPL-3.0-only"
 description = "Seats, poses and crawling for Pumpkin using its Wasm 0.2 plugin API"
