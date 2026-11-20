@@ -70,12 +70,21 @@ case ${1:-} in
             [[ $status == published || $current == "$PLUGIN_VERSION" ]] || fail 'The listing now has a different version awaiting publication.'
             echo 'The same stable GitHub release has already been uploaded.'
         else
-            [[ $status != under_review ]] || fail 'Another version is under review. Wait for its review before uploading.'
             metadata=$(jq -cn --arg version "$PLUGIN_VERSION" --arg notes "$notes" \
                 '{version: $version, track: "stable", releaseNotes: $notes}')
+            # Studio accepts version updates on the same listing while staff review it.
             request PUT "$plugin_url" --form 'wasm=@PumpGsit.wasm;type=application/wasm' --form-string "metadata=$metadata"
             require_success 'stable version upload'
+            # Read the new version and review state before deciding whether to submit.
+            for delay in 0 2 5; do
+                sleep "$delay"
+                read_listing
+                current=$(jq -r '.version // empty' <<< "$listing")
+                if [[ $current == "$PLUGIN_VERSION" ]]; then break; fi
+            done
+            [[ $current == "$PLUGIN_VERSION" ]] || fail "Market accepted the upload but reports version '$current' instead of $PLUGIN_VERSION."
         fi
+        echo "Pumpkin Market listing $MARKET_PLUGIN_ID: $PLUGIN_VERSION (status: $status)."
         case $status in
             draft|rejected) needs_review=true ;;
             *) needs_review=false ;;
