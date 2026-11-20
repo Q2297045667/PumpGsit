@@ -2,18 +2,20 @@
 # Publish a verified bundle. An interrupted draft can be resumed on a rerun.
 set -euo pipefail
 
-cd release-assets
-sha256sum PumpGsit.wasm | cmp - SHA256SUMS
+# shellcheck source=/dev/null
+source .github/plugin.env
+asset="$PLUGIN_NAME.wasm"
+(cd release-assets && sha256sum -- "$asset" | cmp - SHA256SUMS)
 notes="$RUNNER_TEMP/PumpGsit-notes.md"
 channel=()
 tag=${RELEASE_TAG:?missing tag from build}
 
 # Check the remote attachment names before publishing a draft or accepting a rerun.
 check_assets() {
-    local names
-    names=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name] | sort | .[]')
-    if [[ "$names" != $'PumpGsit.wasm\nSHA256SUMS' ]]; then
-        printf 'Unexpected release attachments for %s:\n%s\n' "$tag" "$names" >&2
+    local assets
+    assets=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets)
+    if ! jq -e --arg file "$asset" '([.assets[].name] | sort) == ([$file, "SHA256SUMS"] | sort)' <<< "$assets" > /dev/null; then
+        printf 'Unexpected attachments for %s: %s\n' "$tag" "$(jq -c '[.assets[].name]' <<< "$assets")" >&2
         return 1
     fi
 }
@@ -21,12 +23,12 @@ check_assets() {
 case "$BUILD_CHANNEL" in
     release)
         [[ "$tag" == "v$PLUGIN_VERSION" ]]
-        title="PumpGsit $tag"
+        title="$PLUGIN_NAME $tag"
         prerelease=false
         ;;
     nightly)
         [[ "$tag" == nightly-* ]]
-        title="PumpGsit $PLUGIN_VERSION"
+        title="$PLUGIN_NAME $PLUGIN_VERSION"
         prerelease=true
         channel+=(--prerelease --latest=false)
         ;;
@@ -42,7 +44,10 @@ repo_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
         "$GITHUB_SHA" "$repo_url" "$GITHUB_SHA" "$repo_url" "$GITHUB_SHA"
     printf '%s\n\n' 'Upgrading from lowercase pumpgsit? Stop the server, back up plugins/data/pumpgsit, and migrate the data directory, plugin override and permission prefix to PumpGsit before startup.'
     printf '[Upgrade and rollback instructions](%s/blob/%s/doc/存储.md).\n' "$repo_url" "$GITHUB_SHA"
+    echo
+    bash .github/scripts/build-changes.sh
 } > "$notes"
+cd release-assets
 
 # A draft can exist before GitHub creates its tag. Verify its target before any write.
 if release=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,targetCommitish 2> "$RUNNER_TEMP/release-view.err"); then
@@ -88,6 +93,6 @@ if [[ "$draft" == absent ]]; then
         --title "$title" --notes-file "$notes" "${channel[@]}"
 fi
 
-gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber PumpGsit.wasm SHA256SUMS
+gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber "$asset" SHA256SUMS
 check_assets
 gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false "${channel[@]}"

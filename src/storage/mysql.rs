@@ -93,7 +93,8 @@ struct Session<'a> {
 
 #[derive(Default)]
 struct Reply {
-    flag: Option<bool>,
+    flags: Vec<bool>,
+    affected_rows: Option<u64>,
     statement: Option<u32>,
 }
 
@@ -187,7 +188,7 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
-    /// Drives the protocol through authentication or one command; SELECTs return one flag column.
+    /// Drives the protocol through authentication or one command; SELECT statements return schema or preference flags.
     fn receive(&mut self) -> Result<Reply> {
         let mut reply = Reply::default();
         let deadline = Instant::now() + TIMEOUT;
@@ -231,15 +232,19 @@ impl<'a> Session<'a> {
                     self.protocol.rsa_seed(seed)?;
                 }
                 Some(Event::Prepared { statement, .. }) => reply.statement = Some(statement.id),
-                Some(Event::Row { mut row, .. }) => {
-                    reply.flag =
-                        Some(match row.next().ok_or("missing MySQL result column")?? {
+                Some(Event::Ok { packet, .. }) => {
+                    reply.affected_rows = Some(packet.affected_rows())
+                }
+                Some(Event::Row { row, .. }) => {
+                    for column in row {
+                        reply.flags.push(match column? {
                             RawValue::Bytes(b"1")
                             | RawValue::Scalar(Value::Int(1) | Value::UInt(1)) => true,
                             RawValue::Bytes(b"0")
                             | RawValue::Scalar(Value::Int(0) | Value::UInt(0)) => false,
                             _ => return Err("expected a MySQL boolean result".into()),
                         });
+                    }
                 }
                 None => {
                     let stream = self.transport.as_mut().expect("session transport").stream();
@@ -260,8 +265,8 @@ impl<'a> Session<'a> {
         self.receive()
     }
 
-    /// Binds one text parameter as a MySQL prepared statement, including legacy UUIDs.
-    fn execute(&mut self, sql: &str, parameter: &str) -> Result<Reply> {
+    /// Binds text parameters without interpolating UUIDs, table names or credentials as values.
+    fn execute<const N: usize>(&mut self, sql: &str, parameters: [&str; N]) -> Result<Reply> {
         self.protocol.prepare(0, sql, None)?;
         let statement = self
             .receive()?
@@ -270,7 +275,7 @@ impl<'a> Session<'a> {
         self.protocol.execute(
             0,
             statement,
-            &[Value::Bytes(parameter.as_bytes().to_vec())],
+            &parameters.map(|value| Value::Bytes(value.as_bytes().to_vec())),
             None,
         )?;
         self.receive()
@@ -294,9 +299,9 @@ pub(super) fn initialize(cfg: &MySqlConfig, data_dir: &Path) -> std::result::Res
         let schema = format!("`{}`", cfg.database.replace('`', "``"));
         let exists = session.execute(
             "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = ?)",
-            &cfg.database,
+            [&cfg.database],
         )?;
-        if exists.flag == Some(false) {
+        if exists.flags == [false] {
             session.query(&format!("CREATE DATABASE IF NOT EXISTS {schema}"))?;
         }
         session.query(&format!("USE {schema}"))?;
@@ -311,12 +316,12 @@ pub(super) fn initialize(cfg: &MySqlConfig, data_dir: &Path) -> std::result::Res
                   c.table_schema = t.table_schema AND c.table_name = t.table_name AND
                   c.column_name = 'uuid' AND c.data_type = 'text' AND c.generation_expression = '')
                  FROM information_schema.tables t WHERE t.table_schema = DATABASE() AND t.table_name = ?",
-                table,
+                [table],
             )?;
-            match layout.flag {
-                None => missing.push(table),
-                Some(true) => {}
-                Some(false) => {
+            match layout.flags.as_slice() {
+                [] => missing.push(table),
+                [true] => {}
+                _ => {
                     return Err(format!("{table}: expected one writable uuid TEXT column").into());
                 }
             }
@@ -329,46 +334,48 @@ pub(super) fn initialize(cfg: &MySqlConfig, data_dir: &Path) -> std::result::Res
     initialize().map_err(|error| format!("MySQL: {error}"))
 }
 
-/// Interprets membership in the original exception table against the configured default.
-pub(super) fn enabled(
+/// Fetches one consistent snapshot with one authentication and one prepared SELECT.
+pub(super) fn read<const N: usize>(
     cfg: &MySqlConfig,
-    data_dir: &Path,
-    feature: Preference,
+    dir: &Path,
+    sql: &str,
     key: &str,
-    default: bool,
-) -> std::result::Result<bool, String> {
-    let sql = format!(
-        "SELECT EXISTS(SELECT 1 FROM {} WHERE uuid = ?)",
-        feature.table()
-    );
-    Session::open(cfg, data_dir, true)
-        .and_then(|mut session| session.execute(&sql, key))
-        .and_then(|reply| {
-            reply
-                .flag
-                .ok_or_else(|| "missing MySQL preference result".into())
-        })
-        .map(|found| default != found)
-        .map_err(|error| format!("MySQL: {error}"))
+) -> std::result::Result<[bool; N], String> {
+    let read = || -> Result<[bool; N]> {
+        Session::open(cfg, dir, true)?
+            .execute(sql, [key; N])?
+            .flags
+            .try_into()
+            .map_err(|_| "unexpected number of MySQL preference flags".into())
+    };
+    read().map_err(|error| format!("MySQL preferences: {error}"))
 }
 
-/// Executes the original single INSERT or DELETE; a failed write is never replayed automatically.
-pub(super) fn set_enabled(
+/// Applies the original INSERT or DELETE on one session. Closing an uncommitted InnoDB
+/// transaction rolls it back if the second half of an implicit toggle fails.
+pub(super) fn change(
     cfg: &MySqlConfig,
-    data_dir: &Path,
+    dir: &Path,
     feature: Preference,
     key: &str,
-    default: bool,
-    enabled: bool,
-) -> std::result::Result<(), String> {
-    let table = feature.table();
-    let sql = if enabled == default {
-        format!("DELETE FROM {table} WHERE uuid = ?")
-    } else {
-        format!("INSERT INTO {table} (uuid) VALUES (?)")
+    exception: Option<bool>,
+) -> std::result::Result<bool, String> {
+    let write = || -> Result<bool> {
+        let mut session = Session::open(cfg, dir, true)?;
+        if let Some(exception) = exception {
+            session.execute(&feature.write_sql(exception), [key])?;
+            return Ok(exception);
+        }
+        session.query("START TRANSACTION")?;
+        let removed = session
+            .execute(&feature.write_sql(false), [key])?
+            .affected_rows
+            .ok_or("missing MySQL delete count")?;
+        if removed == 0 {
+            session.execute(&feature.write_sql(true), [key])?;
+        }
+        session.query("COMMIT")?;
+        Ok(removed == 0)
     };
-    Session::open(cfg, data_dir, true)
-        .and_then(|mut session| session.execute(&sql, key))
-        .map(|_| ())
-        .map_err(|error| format!("MySQL {table}: {error}"))
+    write().map_err(|error| format!("MySQL {}: {error}", feature.table()))
 }

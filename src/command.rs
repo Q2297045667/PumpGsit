@@ -1,4 +1,6 @@
 //! Brigadier command trees, Bukkit permission mappings, and player preference writes.
+mod prefs;
+
 use crate::{
     bindings::{
         CommandError, CommandSender, ConsumedArgs, Context,
@@ -10,14 +12,14 @@ use crate::{
             uuid,
         },
     },
-    config, data_dir,
+    config,
     gameplay::{
         crawl,
         pose::{self, Pose},
         seat::{self, Activity},
     },
     hint, message, preferences,
-    storage::{self, Preference},
+    storage::Preference,
 };
 
 const SIT: u32 = 1;
@@ -51,6 +53,7 @@ const GROUPS: &[(&str, &[&str])] = &[
             "kick.*",
             "bypass.*",
             "reload",
+            "prefs",
         ],
     ),
 ];
@@ -125,6 +128,8 @@ pub fn register(ctx: &Context) -> Result<(), String> {
     }
     permission(ctx, "reload", true, &[])?;
     permission(ctx, "command", false, &[])?;
+    permission(ctx, "prefs", false, &[])?;
+    prefs::register(ctx);
     let commands: &[(&[&str], &str, &str)] = &[
         (
             &["pumpgsit", "gsit", "sit"],
@@ -235,21 +240,12 @@ fn preferences(
     target: uuid::Uuid,
     mode: Option<&str>,
 ) -> Result<&'static str, &'static str> {
-    let dir = data_dir();
-    let key = uuid::to_string(target);
-    let cfg = config();
-    let default = preferences::default_for(&cfg, pref);
-    let change = || -> Result<bool, String> {
-        let value = match mode {
-            Some(mode) if mode.eq_ignore_ascii_case("on") => true,
-            Some(mode) if mode.eq_ignore_ascii_case("off") => false,
-            _ => !storage::enabled(&cfg.database, &dir, pref, &key, default)?,
-        };
-        storage::set_enabled(&cfg.database, &dir, pref, &key, default, value)?;
-        preferences::forget(target);
-        Ok(value)
+    let desired = match mode {
+        Some(word) if word.eq_ignore_ascii_case("on") => Some(true),
+        Some(word) if word.eq_ignore_ascii_case("off") => Some(false),
+        _ => None,
     };
-    match change() {
+    match preferences::change(target, pref, desired) {
         Ok(value) => Ok(match (pref, value) {
             (Preference::Sit, true) => "command-gsit-toggle-on",
             (Preference::Sit, false) => "command-gsit-toggle-off",
@@ -391,6 +387,15 @@ pub async fn run(
     args: ConsumedArgs,
 ) -> Result<i32, CommandError> {
     let player = sender.as_player();
+    if id == prefs::HANDLER {
+        return match prefs::show(&sender, player.as_ref(), &server, &args).await {
+            Ok(()) => Ok(1),
+            Err(key) => {
+                sender.send_error(message(player.as_ref(), key));
+                Ok(0)
+            }
+        };
+    }
     let (Arg::Simple(target), Arg::Simple(args)) =
         (args.get_value("target"), args.get_value("args"))
     else {

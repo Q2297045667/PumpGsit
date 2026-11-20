@@ -1,0 +1,3 @@
+[files]
+# WIT is vendored from Pumpkin. The English dictionary applies only to en_us.
+extend-exclude = ["wit/", "assets/lang/*", "!assets/lang/en_us.yml"]

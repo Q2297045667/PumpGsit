@@ -2,14 +2,13 @@
 
 use crate::{
     bindings::pumpkin::plugin::{ipc, uuid},
-    data_dir,
     gameplay::{
         crawl,
         seat::{self, Activity},
     },
     preferences, server,
     state::State,
-    storage::{self, Preference},
+    storage::Preference,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -118,18 +117,10 @@ fn resolve(callback: &Callback) -> Option<bool> {
         "crawltoggle" => Preference::Crawl,
         _ => return None,
     };
-    if let Some(player) = player {
-        return Some(preferences::enabled(&player, preference));
-    }
-    let cfg = crate::config();
-    let value = storage::enabled(
-        &cfg.database,
-        &data_dir(),
-        preference,
-        &uuid::to_string(id),
-        preferences::default_for(&cfg, preference),
-    );
-    Some(preferences::legacy_read(value))
+    Some(match player {
+        Some(player) => preferences::enabled(&player, preference),
+        None => preferences::offline(id, preference),
+    })
 }
 
 /// Answers an authenticated PIE callback, declining missing viewers and undeclared names.

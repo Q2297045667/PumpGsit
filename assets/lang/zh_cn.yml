@@ -48,7 +48,15 @@ Messages:
   action-blocked-error: "[P]&c 你现在不能执行此指令!"
 
 PumpGsit:
-  help: "使用 /sit、/lay、/legsup、/bellyflop、/spin 或 /crawl 切换姿势，再次输入相同命令可以起身。用 /sit toggle、/sit playertoggle 或 /crawl toggle [on|off] 修改互动偏好。"
+  help: "使用 /sit、/lay、/legsup、/bellyflop、/spin 或 /crawl 切换姿势，再次输入相同命令可以起身。用 /sit toggle、/sit playertoggle 或 /crawl toggle [on|off] 修改互动偏好。 输入 /gsitprefs 可查看自己的当前设置。"
   edition: "这个姿势需要 Java 版 26.3 客户端。"
   target: "请提供在线玩家名或原玩家的 UUID。"
   bad_config: "无法重新加载 PumpGsit，之前的设置仍然生效。"
+  prefs-title: "互动偏好"
+  prefs-sit: "右键方块坐下"
+  prefs-playersit: "右键玩家叠坐"
+  prefs-crawl: "潜行手势爬行"
+  prefs-on: "&a开启"
+  prefs-off: "&c关闭"
+  prefs-click: "点击切换这项偏好。"
+  prefs-self: "直接输入 /gsitprefs 即可查看自己的设置。"

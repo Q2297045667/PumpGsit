@@ -15,7 +15,6 @@ use crate::{
         },
     },
     config, hint, message, preferences,
-    storage::Preference,
 };
 
 /// Checks whether this player's active seat currently renders a PumpGsit pose.
@@ -64,10 +63,7 @@ pub(crate) async fn dispatch(server: &Server, event: &mut Event) {
             }
             if matches!(e.action, InteractAction::RightClickBlock)
                 && let Some(pos) = e.clicked_pos
-                && let Some(hit) = seat::click_target(&e.player, pos)
-                && e.player.has_permission("PumpGsit:sitclick".into()).await
-                && preferences::enabled(&e.player, Preference::Sit)
-                && seat::start(&e.player, server, Activity::Sit, Some((pos, hit)))
+                && seat::start(&e.player, server, Activity::Sit, Some(pos))
                     .await
                     .is_ok()
             {
@@ -88,24 +84,17 @@ pub(crate) async fn dispatch(server: &Server, event: &mut Event) {
                 hint(&e.player, "action-playersit-info");
             }
         }
-        Event::PlayerToggleSneakEvent(e) if !e.cancelled => {
+        Event::PlayerToggleSneakEvent(e) if !e.cancelled && e.is_sneaking => {
             // Accepted sneak input dismounts through Pumpkin immediately after this callback.
             // Reconcile the actual ride after that change, allowing other listeners to cancel.
             if seat::activity(&e.player).is_none() {
-                if e.is_sneaking
-                    && config().player_sit.sneak_ejects
+                if config().player_sit.sneak_ejects
+                    && !e.player.is_flying()
                     && e.player.as_entity().get_vehicle().is_none()
                 {
                     seat::eject(&e.player, server).await
                 }
-                let cfg = config();
-                let can_start = e.is_sneaking
-                    && !crawl::active(&e.player)
-                    && (cfg.crawl.corridor_crawl || cfg.crawl.double_sneak)
-                    && e.player.has_permission("PumpGsit:crawlsneak".into()).await
-                    && seat::allowed(&e.player).await
-                    && preferences::enabled(&e.player, Preference::Crawl);
-                crawl::sneak(&e.player, e.is_sneaking, can_start).await;
+                crawl::sneak(&e.player).await;
             }
         }
         Event::EntityToggleSwimEvent(e)
@@ -120,9 +109,7 @@ pub(crate) async fn dispatch(server: &Server, event: &mut Event) {
         }
         Event::PlayerMoveEvent(e) if !e.cancelled => {
             seat::accepted_move(&e.player);
-            if crawl::active(&e.player) {
-                crawl::moved(&e.player, e.to_position).await
-            }
+            crawl::moved(&e.player, e.to_position).await
         }
         Event::PlayerLeaveEvent(e) => {
             preferences::forget(e.player.get_id());
@@ -159,20 +146,23 @@ pub(crate) async fn dispatch(server: &Server, event: &mut Event) {
             pose::swing(&e.player, e.animation_type == "ArmSwingOff", server)
         }
         Event::EntityDamageEvent(e) if !e.cancelled => {
-            if matches!(e.damage_type, DamageType::Fall)
-                && seat::activity_by_id(e.entity_id as u32) == Some(Activity::PlayerSit)
-            {
-                e.cancelled = true;
-                return;
+            let rider = seat::rider(e.entity_id as u32);
+            if let Some((activity, uuid)) = rider {
+                if activity == Activity::PlayerSit {
+                    e.cancelled = matches!(e.damage_type, DamageType::Fall);
+                    return;
+                }
+                if activity.is_pose() {
+                    pose::hurt(uuid, server).await;
+                }
             }
-            pose::hurt(e.entity_id, server).await;
-            if !config().get_up_damage
-                || e.damage <= 0.0
-                || seat::activity_by_id(e.entity_id as u32) == Some(Activity::PlayerSit)
+            if config().get_up_damage
+                && e.damage > 0.0
+                && let Some(uuid) = rider
+                    .map(|(_, uuid)| uuid)
+                    .or_else(|| crawl::owner(e.entity_id))
+                && let Some(player) = server.get_player_by_uuid(uuid)
             {
-                return;
-            }
-            if let Some(player) = seat::player_by_id(server, e.entity_id as u32) {
                 crawl::stop(&player).await;
                 seat::stop(&player, server, true).await
             }

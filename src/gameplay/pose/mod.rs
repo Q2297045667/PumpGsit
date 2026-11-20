@@ -435,14 +435,19 @@ impl Session {
             .with_borrow_mut(|last| last.replace(rotation))
             != Some(rotation);
         let sleep_config = crate::config().pose;
-        let day_tick = owner
-            .get_player_time()
-            .unwrap_or_else(|| owner.get_world().get_time_of_day())
-            % 24000;
-        for viewer in server.get_all_players() {
+        let snore = self.pose.sleeping() && sleep_config.lay_snoring_sounds && {
+            let day_tick = owner
+                .get_player_time()
+                .unwrap_or_else(|| owner.get_world().get_time_of_day())
+                % 24000;
+            day_tick.is_multiple_of(90)
+                && (!sleep_config.lay_snoring_night_only || (12500..=23500).contains(&day_tick))
+        };
+        for viewer in server.get_players_in_world(owner.get_world()) {
             if self.closed.get() {
                 return;
             }
+            // Sending packets to earlier viewers can yield while another viewer switches worlds.
             if key(viewer.get_world().get_uuid()) != self.world {
                 continue;
             }
@@ -493,11 +498,7 @@ impl Session {
             if self.pose.sleeping() && matches!(age, 2 | 4) {
                 protocol::correct_sleeper(&java, self.avatar.id, self.location());
             }
-            if self.pose.sleeping()
-                && sleep_config.lay_snoring_sounds
-                && (!sleep_config.lay_snoring_night_only || (12500..=23500).contains(&day_tick))
-                && day_tick.is_multiple_of(90)
-            {
+            if snore {
                 viewer.play_sound_at(
                     self.surface,
                     Sound::EntityFoxSleep,
@@ -706,13 +707,8 @@ pub fn swing(player: &Player, off_hand: bool, server: &Server) {
 }
 
 /// Forwards a hit animation from an accepted damage event to each viewer's avatar.
-pub async fn hurt(entity: i32, server: &Server) {
-    let session = POSES.with_borrow(|poses| {
-        poses
-            .values()
-            .find(|s| s.owner_entity == entity as u32)
-            .cloned()
-    });
+pub async fn hurt(owner: Uuid, server: &Server) {
+    let session = POSES.with_borrow(|poses| poses.get(&key(owner)).cloned());
     if let Some(session) = session {
         for id in session.viewer_ids() {
             if let Some(java) = server.get_player_by_uuid(uuid(id)).and_then(|p| client(&p)) {

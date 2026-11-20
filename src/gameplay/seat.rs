@@ -6,6 +6,7 @@ use crate::{
         entity_types::EntityType,
         player::Player,
         server::Server,
+        uuid::Uuid,
         world::{self, BlockDirection, BlockState, World},
     },
     config,
@@ -44,11 +45,11 @@ impl Activity {
 #[derive(Clone)]
 struct Seat {
     rider: u32,
-    rider_uuid: crate::bindings::pumpkin::plugin::uuid::Uuid,
+    rider_uuid: Uuid,
     vehicle: u32,
     world: String,
     block: Option<Key>,
-    had_support: bool,
+    support_state: Option<u16>,
     original: Position,
     surface: Position,
     vehicle_y: f64,
@@ -58,7 +59,13 @@ struct Seat {
 type Riders<T> = LazyLock<State<HashMap<u32, T>>>;
 static SEATS: Riders<Seat> = LazyLock::new(State::default);
 // A movement callback is issued only after Pumpkin accepted the dismount acknowledgement.
-static RETURNS: Riders<(String, Position, bool)> = LazyLock::new(State::default);
+struct PendingReturn {
+    rider: Uuid,
+    world: String,
+    destination: Position,
+    ready: bool,
+}
+static RETURNS: Riders<PendingReturn> = LazyLock::new(State::default);
 /// GSit tracks ordinary seats separately from its four stationary poses on a block.
 #[derive(Clone, Copy, PartialEq)]
 enum BlockUse {
@@ -93,12 +100,20 @@ fn reserve(id: u32, world: &str, block: Option<BlockUse>) -> Result<Admission, &
 
 /// Returns the plugin-owned action for a rider, if one exists.
 pub fn activity(player: &Player) -> Option<Activity> {
+    if SEATS.with_borrow(HashMap::is_empty) {
+        return None;
+    }
     activity_by_id(player.as_entity().get_id())
 }
 
 /// Looks up a tracked activity directly from a host event's entity id.
 pub fn activity_by_id(id: u32) -> Option<Activity> {
-    SEATS.with_borrow(|m| m.get(&id).map(|s| s.activity))
+    rider(id).map(|(activity, _)| activity)
+}
+
+/// Resolves damage events directly to the tracked rider without enumerating online players.
+pub fn rider(id: u32) -> Option<(Activity, Uuid)> {
+    SEATS.with_borrow(|m| m.get(&id).map(|s| (s.activity, s.rider_uuid)))
 }
 
 /// Applies the command blacklist to seated players and either end of a player stack.
@@ -168,7 +183,7 @@ fn supporting_block(world: &World, (x, y, z): Position) -> BlockPos {
 }
 
 /// Determines the clicked top face and exact location from the current look ray.
-pub fn click_target(player: &Player, pos: BlockPos) -> Option<Position> {
+fn click_target(player: &Player, pos: BlockPos) -> Option<Position> {
     let reach = player.as_entity().as_living()?.get_attribute_value(
         crate::bindings::pumpkin::plugin::attributes::Attribute::BlockInteractionRange,
     );
@@ -209,27 +224,13 @@ pub async fn start(
     player: &Player,
     server: &Server,
     kind: Activity,
-    click: Option<(BlockPos, Position)>,
+    click: Option<BlockPos>,
 ) -> Result<Position, &'static str> {
     let cfg = config();
     let rider = player.as_entity();
-    if !rider.is_valid()
-        || player.is_sneaking()
-        || rider.get_vehicle().is_some()
-        || player.is_sleeping()
-        || crawl::active(player)
-        || (click.is_none() && !rider.is_on_ground())
-    {
-        return Err("state");
-    }
-    if !allowed(player).await {
-        return Err("world");
-    }
     let world = player.get_world();
     let original = rider.get_position();
-    let pos = click
-        .map(|c| c.0)
-        .unwrap_or_else(|| supporting_block(&world, original));
+    let pos = click.unwrap_or_else(|| supporting_block(&world, original));
     let key = (pos.x, pos.y, pos.z);
     let state = world.get_block_state(pos);
     let props = &state.properties;
@@ -245,6 +246,18 @@ pub async fn start(
             || (cfg.sit.empty_hand_only && player.get_item_in_hand(Hand::Right).is_some()))
     {
         return Err("location");
+    }
+    if !rider.is_valid()
+        || player.is_sneaking()
+        || rider.get_vehicle().is_some()
+        || player.is_sleeping()
+        || crawl::active(player)
+        || (click.is_none() && !rider.is_on_ground())
+    {
+        return Err("state");
+    }
+    if !allowed(player).await {
+        return Err("world");
     }
     if cfg.material_blacklist.iter().any(|r| matches(r, &state)) {
         return Err("location");
@@ -284,6 +297,17 @@ pub async fn start(
     {
         return Err("location");
     }
+    let point = if click.is_some() {
+        let hit = click_target(player, pos).ok_or("location")?;
+        if !player.has_permission("PumpGsit:sitclick".into()).await
+            || !enabled(player, Preference::Sit)
+        {
+            return Err("refused");
+        }
+        hit
+    } else {
+        original
+    };
     let (mut surface, mut yaw) = if cfg.center_block {
         (
             (
@@ -294,7 +318,7 @@ pub async fn start(
             rider.get_yaw(),
         )
     } else {
-        (click.map(|c| c.1).unwrap_or(original), rider.get_yaw())
+        (point, rider.get_yaw())
     };
     if stairs && prop("half", "bottom") && kind == Activity::Sit {
         let (x, z, angle) = stair_offset(props);
@@ -347,7 +371,7 @@ pub async fn start(
             if !player.has_permission(node.into()).await {
                 return Err("occupied");
             }
-            if let Some(victim) = player_by_id(server, other.rider) {
+            if let Some(victim) = server.get_player_by_uuid(other.rider_uuid) {
                 stop(&victim, server, true).await;
             }
             if SEATS.with_borrow(|m| m.contains_key(&other.rider)) {
@@ -390,7 +414,7 @@ pub async fn start(
         vehicle: id,
         world: name,
         block: Some(key),
-        had_support: !state.is_air,
+        support_state: (!state.is_air).then_some(state.id),
         original,
         surface,
         vehicle_y,
@@ -403,14 +427,6 @@ pub async fn start(
 /// Checks the optional Euclidean distance limit in blocks.
 fn too_far(a: Position, b: Position, max: f64) -> bool {
     max > 0.0 && (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) + (a.2 - b.2).powi(2) > max * max
-}
-
-/// Finds an online player by the entity id used in the host's ride and damage events.
-pub fn player_by_id(server: &Server, id: u32) -> Option<Player> {
-    server
-        .get_all_players()
-        .into_iter()
-        .find(|p| p.as_entity().get_id() == id)
 }
 
 /// Resolves the full player stack, rejects cycles, and mounts the consenting top player.
@@ -431,10 +447,14 @@ pub async fn stack(player: &Player, target_id: u32, server: &Server) -> bool {
     {
         return false;
     }
-    let Some(mut top) = player_by_id(server, target_id) else {
+    let world = player.get_world();
+    let Some(mut top) = world
+        .get_entity_by_id(target_id as i32)
+        .and_then(|entity| server.get_player_by_uuid(entity.get_uuid()))
+    else {
         return false;
     };
-    let name = player.get_world().get_id();
+    let name = world.get_id();
     if top.get_world().get_id() != name
         || too_far(
             rider.get_position(),
@@ -506,7 +526,7 @@ pub async fn stack(player: &Player, target_id: u32, server: &Server) -> bool {
         vehicle: vehicle_id,
         world: name,
         block: None,
-        had_support: false,
+        support_state: None,
         original,
         surface,
         vehicle_y: surface.1,
@@ -570,7 +590,17 @@ pub async fn stop(player: &Player, server: &Server, reposition: bool) {
         && let Some(location) = return_position(&seat, &world, false)
     {
         // Keep this available to the leave callback even if the player quits during dismount.
-        RETURNS.with_borrow_mut(|m| m.insert(id, (seat.world.clone(), location, false)));
+        RETURNS.with_borrow_mut(|m| {
+            m.insert(
+                id,
+                PendingReturn {
+                    rider: seat.rider_uuid,
+                    world: seat.world.clone(),
+                    destination: location,
+                    ready: false,
+                },
+            )
+        });
     }
     if mounted(player, seat.vehicle) {
         player.as_entity().set_vehicle(None).await;
@@ -593,8 +623,8 @@ pub async fn disconnect(player: &Player, server: &Server) {
     let position = match &seat {
         Some(seat) if seat.world == name => return_position(seat, &world, true),
         _ => pending
-            .filter(|(w, _, _)| w == &name)
-            .map(|(_, pos, _)| pos),
+            .filter(|entry| entry.world == name)
+            .map(|entry| entry.destination),
     };
     // Pumpkin already unlinked the passenger. A departing client cannot acknowledge a dismount.
     if let Some(position) = position {
@@ -614,7 +644,7 @@ pub fn accepted_move(player: &Player) {
     let id = player.as_entity().get_id();
     RETURNS.with_borrow_mut(|m| {
         if let Some(entry) = m.get_mut(&id) {
-            entry.2 = true;
+            entry.ready = true;
         }
     });
 }
@@ -630,11 +660,11 @@ pub async fn eject(player: &Player, server: &Server) {
     let riders = SEATS.with_borrow(|m| {
         m.values()
             .filter(|s| s.vehicle == id && s.activity == Activity::PlayerSit)
-            .map(|s| s.rider)
+            .map(|s| s.rider_uuid)
             .collect::<Vec<_>>()
     });
     for rider in riders {
-        if let Some(p) = player_by_id(server, rider) {
+        if let Some(p) = server.get_player_by_uuid(rider) {
             stop(&p, server, false).await
         }
     }
@@ -644,32 +674,49 @@ pub async fn eject(player: &Player, server: &Server) {
 pub async fn reconcile(server: &Server) {
     let ready = RETURNS.with_borrow(|m| {
         m.iter()
-            .filter(|(_, entry)| entry.2)
-            .map(|(&id, _)| id)
+            .filter(|(_, entry)| entry.ready)
+            .map(|(&id, entry)| (id, entry.rider))
             .collect::<Vec<_>>()
     });
-    for id in ready {
+    for (id, uuid) in ready {
         // World removal precedes the leave callback. Preserve its return until that callback runs.
-        if let Some(player) = player_by_id(server, id)
-            && let Some((world, location, _)) = RETURNS.with_borrow_mut(|m| m.remove(&id))
+        if let Some(player) = server.get_player_by_uuid(uuid)
+            && let Some(entry) = RETURNS.with_borrow_mut(|m| m.remove(&id))
             && player.as_entity().get_vehicle().is_none()
-            && player.get_world().get_id() == world
+            && player.get_world().get_id() == entry.world
         {
             player
-                .teleport(location, None, None, player.get_world())
+                .teleport(entry.destination, None, None, player.get_world())
                 .await;
         }
     }
-    let seats = SEATS.with_borrow(|m| m.values().cloned().collect::<Vec<_>>());
-    for seat in seats {
-        if let Some(p) = server.get_player_by_uuid(seat.rider_uuid) {
+    let seats = SEATS.with_borrow(|m| {
+        m.values()
+            .map(|seat| {
+                (
+                    seat.rider_uuid,
+                    seat.vehicle,
+                    seat.block.zip(seat.support_state),
+                )
+            })
+            .collect::<Vec<_>>()
+    });
+    for (rider, vehicle, support) in seats {
+        if let Some(p) = server.get_player_by_uuid(rider) {
             let lost_support = config().get_up_break
-                && seat.had_support
-                && seat.block.is_some_and(|(x, y, z)| {
-                    p.get_world().get_block_state(BlockPos { x, y, z }).is_air
+                && support.is_some_and(|((x, y, z), initial_state)| {
+                    let world = p.get_world();
+                    let pos = BlockPos { x, y, z };
+                    // Most seats keep the same support. Only a replacement needs its full state.
+                    world.get_block_state_id(pos) != initial_state
+                        && world.get_block_state(pos).is_air
                 });
-            if !mounted(&p, seat.vehicle) || lost_support {
-                stop(&p, server, true).await
+            if !mounted(&p, vehicle) || lost_support {
+                // An earlier rider's dismount may have yielded while this player took another seat.
+                let id = p.as_entity().get_id();
+                if SEATS.with_borrow(|m| m.get(&id).is_some_and(|s| s.vehicle == vehicle)) {
+                    stop(&p, server, true).await
+                }
             }
         }
     }

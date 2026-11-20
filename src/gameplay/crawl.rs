@@ -8,6 +8,7 @@ use crate::bindings::pumpkin::plugin::{
     world::World,
 };
 use crate::state::State;
+use crate::{preferences, storage::Preference};
 use std::{collections::HashMap, sync::LazyLock, time::Instant};
 
 // Session-local client entity IDs are separate from Pumpkin's positive world entity IDs.
@@ -22,6 +23,7 @@ struct Ceiling {
 }
 
 struct Crawl {
+    owner: Uuid,
     first_id: i32,
     radius: i32,
     entered_corridor: Option<bool>,
@@ -43,6 +45,11 @@ pub fn active(player: &Player) -> bool {
 /// Keeps vanilla's out-of-water cleanup from cancelling the plugin's active crawl.
 pub fn prevent_swim_stop(entity_id: i32) -> bool {
     CRAWLS.with_borrow(|crawls| crawls.contains_key(&entity_id))
+}
+
+/// Gets the UUID of a crawling damage target without creating player handles for spectators.
+pub fn owner(entity_id: i32) -> Option<Uuid> {
+    CRAWLS.with_borrow(|crawls| crawls.get(&entity_id).map(|c| c.owner))
 }
 
 /// Requires the same standing, unridden player as the original command and disallows
@@ -78,10 +85,12 @@ async fn begin(player: &Player, corridor: bool) -> Result<(), String> {
         })
         .ok_or("refused")?;
     let key = id(player);
+    let owner = player.get_id();
     CRAWLS.with_borrow_mut(|crawls| {
         crawls.insert(
             key,
             Crawl {
+                owner,
                 first_id,
                 radius,
                 entered_corridor: corridor.then_some(false),
@@ -159,10 +168,7 @@ fn corridor(world: &World, (x, y, z): Position, yaw: f32) -> bool {
 
 /// Handles rising sneak edges, prioritizing a configured downward double-sneak
 /// ahead of corridor detection. Existing crawls use their independent get-up setting.
-pub async fn sneak(player: &Player, entering: bool, enabled: bool) {
-    if !entering {
-        return;
-    }
+pub async fn sneak(player: &Player) {
     let config = crate::config().crawl;
     if active(player) {
         if config.get_up_sneak {
@@ -170,10 +176,23 @@ pub async fn sneak(player: &Player, entering: bool, enabled: bool) {
         }
         return;
     }
-    if !enabled || !can_start(player) {
+    if (!config.double_sneak && !config.corridor_crawl) || !can_start(player) {
         return;
     }
-    if config.double_sneak && player.get_pitch() >= config.double_sneak_pitch {
+    let double = config.double_sneak && player.get_pitch() >= config.double_sneak_pitch;
+    if !double
+        && !(config.corridor_crawl
+            && corridor(&player.get_world(), player.get_position(), player.get_yaw()))
+    {
+        return;
+    }
+    if !player.has_permission("PumpGsit:crawlsneak".into()).await
+        || !super::seat::allowed(player).await
+        || !preferences::enabled(player, Preference::Crawl)
+    {
+        return;
+    }
+    if double {
         let now = Instant::now();
         let key = id(player);
         let triggered = LAST_SNEAK.with_borrow_mut(|sneaks| {
@@ -189,9 +208,7 @@ pub async fn sneak(player: &Player, entering: bool, enabled: bool) {
         if triggered {
             let _ = begin(player, false).await;
         }
-    } else if config.corridor_crawl
-        && corridor(&player.get_world(), player.get_position(), player.get_yaw())
-    {
+    } else {
         let _ = begin(player, true).await;
     }
 }
@@ -199,6 +216,9 @@ pub async fn sneak(player: &Player, entering: bool, enabled: bool) {
 /// Tracks passage through a one-block-high corridor and exits on the first move back
 /// into headroom. Water and flight release all crawls, including command-initiated ones.
 pub async fn moved(player: &Player, to: Position) {
+    if CRAWLS.with_borrow(|crawls| crawls.is_empty()) {
+        return;
+    }
     let key = id(player);
     let Some(entered) = CRAWLS.with_borrow(|crawls| crawls.get(&key).map(|c| c.entered_corridor))
     else {

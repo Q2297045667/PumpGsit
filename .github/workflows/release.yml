@@ -88,21 +88,23 @@ jobs:
           RELEASE_TAG: v${{ needs.prepare.outputs.version }}
           PUBLISHED_ID: ${{ needs.prepare.outputs.published_id }}
         run: |
+          source .github/plugin.env
+          asset="$PLUGIN_NAME.wasm"
           release=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
-          jq -e --arg tag "$RELEASE_TAG" --arg id "$PUBLISHED_ID" '
+          jq -e --arg tag "$RELEASE_TAG" --arg id "$PUBLISHED_ID" --arg file "$asset" '
             .tag_name == $tag and .draft == false and .prerelease == false and
             ($id == "" or (.id | tostring) == $id) and
-            ([.assets[].name] | sort) == ["PumpGsit.wasm", "SHA256SUMS"]
+            ([.assets[].name] | sort) == ([$file, "SHA256SUMS"] | sort)
           ' <<< "$release" >/dev/null || { echo "::error::The expected published release or its assets have changed."; exit 1; }
           mkdir -p release-assets
-          for name in PumpGsit.wasm SHA256SUMS; do
+          for name in "$asset" SHA256SUMS; do
             id=$(jq -er --arg name "$name" '.assets[] | select(.name == $name) | .id' <<< "$release")
             gh api -H 'Accept: application/octet-stream' "repos/$GITHUB_REPOSITORY/releases/assets/$id" > "release-assets/$name"
           done
       - name: Verify and upload the stable component
         id: upload
         env:
-          MARKET_TOKEN: ${{ secrets.Pumpkin_Market_Token }}
+          MARKET_TOKEN: ${{ secrets.PUMPKIN_MARKET_TOKEN }}
           MARKET_PLUGIN_ID: ${{ vars.PUMPKIN_MARKET_PLUGIN_ID }}
           RELEASE_TAG: v${{ needs.prepare.outputs.version }}
           PLUGIN_VERSION: ${{ needs.prepare.outputs.version }}
@@ -120,7 +122,7 @@ jobs:
           persist-credentials: false
       - name: Check listing requirements and submit
         env:
-          MARKET_TOKEN: ${{ secrets.Pumpkin_Market_Token }}
+          MARKET_TOKEN: ${{ secrets.PUMPKIN_MARKET_TOKEN }}
           MARKET_PLUGIN_ID: ${{ needs.market_upload.outputs.plugin_id }}
           PLUGIN_VERSION: ${{ needs.prepare.outputs.version }}
         run: bash .github/scripts/publish-market.sh review

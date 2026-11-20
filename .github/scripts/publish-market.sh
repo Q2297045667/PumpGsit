@@ -2,6 +2,11 @@
 # Upload a checked GitHub release or submit its existing Studio listing for review.
 set -euo pipefail
 
+# shellcheck source=/dev/null
+source .github/plugin.env
+asset="$PLUGIN_NAME.wasm"
+listing_name=${MARKET_PLUGIN_NAME:-$PLUGIN_NAME}
+
 # Report a publishing error and stop before making further requests.
 fail() {
     printf '%s\n' "$*" >&2
@@ -9,7 +14,7 @@ fail() {
 }
 
 [[ ${MARKET_PLUGIN_ID:-} =~ ^[1-9][0-9]*$ ]] || fail 'Set PUMPKIN_MARKET_PLUGIN_ID to the numeric ID from the Studio management URL.'
-: "${MARKET_TOKEN:?Set the Pumpkin_Market_Token repository secret.}"
+: "${MARKET_TOKEN:?Set the PUMPKIN_MARKET_TOKEN repository secret.}"
 : "${PLUGIN_VERSION:?Missing version from the GitHub release.}"
 api=https://market.pumpkinmc.org/api
 plugin_url="$api/plugins/$MARKET_PLUGIN_ID"
@@ -45,8 +50,8 @@ read_listing() {
         require_success 'listing lookup'
         listing=$(cat "$response")
     fi
-    jq -e --arg id "$MARKET_PLUGIN_ID" '(.id | tostring) == $id and .name == "PumpGsit"' \
-        <<< "$listing" > /dev/null || fail 'The configured Market listing does not identify PumpGsit.'
+    jq -e --arg id "$MARKET_PLUGIN_ID" --arg name "$listing_name" '(.id | tostring) == $id and .name == $name' \
+        <<< "$listing" > /dev/null || fail "The configured Market listing does not identify $listing_name."
     status=$(jq -er '.status' <<< "$listing")
     case $status in
         draft | rejected | under_review | published) ;;
@@ -58,8 +63,8 @@ case ${1:-} in
     upload)
         [[ $RELEASE_TAG == "v$PLUGIN_VERSION" ]] || fail 'Expected a stable GitHub release tag.'
         cd release-assets
-        checksum=$(sha256sum PumpGsit.wasm)
-        printf '%s\n' "$checksum" | cmp - SHA256SUMS || fail 'The GitHub release checksum does not match PumpGsit.wasm.'
+        checksum=$(sha256sum -- "$asset")
+        printf '%s\n' "$checksum" | cmp - SHA256SUMS || fail "The GitHub release checksum does not match $asset."
         notes=$(printf '%s/releases/tag/%s\nSHA-256: %s' "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$RELEASE_TAG" "${checksum%% *}")
         read_listing
         versions=$(jq -c --arg v "$PLUGIN_VERSION" '[.versions[]? | select(.version == $v)]' <<< "$listing")
@@ -73,7 +78,7 @@ case ${1:-} in
             metadata=$(jq -cn --arg version "$PLUGIN_VERSION" --arg notes "$notes" \
                 '{version: $version, track: "stable", releaseNotes: $notes}')
             # Studio accepts version updates on the same listing while staff review it.
-            request PUT "$plugin_url" --form 'wasm=@PumpGsit.wasm;type=application/wasm' --form-string "metadata=$metadata"
+            request PUT "$plugin_url" --form "wasm=@$asset;type=application/wasm" --form-string "metadata=$metadata"
             require_success 'stable version upload'
             # Read the new version and review state before deciding whether to submit.
             for delay in 0 2 5; do
@@ -105,7 +110,7 @@ case ${1:-} in
             fail "Complete the listing in Studio, then re-run the failed review job: $(jq -c '.missingRequirements' "$response")"
         request POST "$plugin_url/publish"
         require_success 'review submission'
-        echo 'PumpGsit was submitted for Market review.'
+        echo "$listing_name was submitted for Market review."
         ;;
     *) fail 'Expected upload or review.' ;;
 esac

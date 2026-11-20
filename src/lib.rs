@@ -94,7 +94,8 @@ impl exports::pumpkin::plugin::metadata::Guest for PumpGsit {
     fn get_metadata() -> exports::pumpkin::plugin::metadata::PluginMetadata {
         exports::pumpkin::plugin::metadata::PluginMetadata {
             name: env!("CARGO_PKG_NAME").into(),
-            version: option_env!("PUMPGSIT_BUILD_VERSION")
+            version: option_env!("PUMPKIN_PLUGIN_VERSION")
+                .or(option_env!("PUMPGSIT_BUILD_VERSION"))
                 .unwrap_or(env!("CARGO_PKG_VERSION"))
                 .into(),
             authors: vec!["PumpGsit contributors (based on GSit by Gecolay)".into()],

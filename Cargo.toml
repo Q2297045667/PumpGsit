@@ -24,3 +24,6 @@ wit-bindgen = { version = "=0.63.0", default-features = false, features = ["asyn
 
 [dev-dependencies]
 tempfile = { version = "3", default-features = false }
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+rusqlite = { version = "=0.43.0", default-features = false, features = ["backup"] }
