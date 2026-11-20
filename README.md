@@ -1,6 +1,8 @@
 # PumpGsit
 
-<img src="assets/icon.png" width="128" height="128" alt="PumpGsit 插件图标">
+<p align="center">
+  <img src="assets/icon.png" width="128" height="128" alt="PumpGsit 插件图标">
+</p>
 
 PumpGsit 将 GSit 3.8.0 的坐下、玩家叠坐、仰卧、翘腿、俯卧、旋转和爬行带到 Pumpkin。插件面向 Minecraft Java 26.3（协议 777），使用 `pumpkin:plugin@0.2.0` 接口，构建目标为 `wasm32-wasip3`。玩家的三项动作偏好可沿用原版 GSit 的 SQLite 文件或 MySQL 数据库。从 v0.1.4 正式版起可以配置 MySQL。
 
