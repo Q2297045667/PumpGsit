@@ -3,7 +3,7 @@ use crate::{
     bindings::{
         CommandError, CommandSender, ConsumedArgs, Context,
         pumpkin::plugin::{
-            command::{Arg, ArgumentType, Command, CommandNode, StringType},
+            command::{Arg, ArgumentType, Command, CommandNode, CommandSenderType, StringType},
             permission::{Permission, PermissionChild, PermissionDefault, PermissionLevel},
             player::Player,
             server::Server,
@@ -19,8 +19,17 @@ use crate::{
 const SIT: u32 = 1;
 const CRAWL: u32 = 6;
 const RELOAD: u32 = 7;
-const HELP: u32 = 8;
-const TOGGLE: u32 = 100;
+// Each executable node carries the command and the literal words Brigadier consumes.
+const PREFIXES: [(&str, &str); 8] = [
+    ("", ""),
+    ("toggle", ""),
+    ("toggle", "on"),
+    ("toggle", "off"),
+    ("playertoggle", ""),
+    ("playertoggle", "on"),
+    ("playertoggle", "off"),
+    ("help", ""),
+];
 const GROUPS: &[(&str, &[&str])] = &[
     ("sit.*", &["sit", "sitclick", "sittoggle"]),
     ("playersit.*", &["playersit", "playersittoggle"]),
@@ -68,24 +77,36 @@ fn permission(ctx: &Context, key: &str, operator: bool, children: &[&str]) -> Re
     }
 }
 
-/// Builds toggle, explicit on/off, and console target branches without accepting ambiguous extra words.
-fn toggle(command: &Command, literal: &str, base: u32) {
-    let node = CommandNode::literal(literal);
-    node.execute_with_handler_id(base);
-    for (offset, name) in [(1, "on"), (2, "off")] {
-        let value = CommandNode::literal(name);
-        value.execute_with_handler_id(base + offset);
-        node.then(value);
-    }
+/// Keeps the remaining Bukkit words intact, including unrecognized or extra arguments.
+fn tail(id: u32) -> CommandNode {
+    let node = CommandNode::argument("args", &ArgumentType::String(StringType::Greedy));
+    node.execute_with_handler_id(id);
+    node
+}
+
+/// Builds a native Brigadier literal that accepts and forwards any remaining text.
+fn literal(word: &str, id: u32) -> CommandNode {
+    let node = CommandNode::literal(word);
+    node.execute_with_handler_id(id);
+    node.then(tail(id));
+    node
+}
+
+/// Publishes native on/off completions in both the player and console argument positions.
+fn toggle_branch(base: u32, slot: usize) -> CommandNode {
+    let id = base + slot as u32;
+    let node = CommandNode::literal(PREFIXES[slot].0);
+    node.execute_with_handler_id(id);
     let target = CommandNode::argument("target", &ArgumentType::String(StringType::SingleWord));
-    target.execute_with_handler_id(base + 3);
-    for (offset, name) in [(4, "on"), (5, "off")] {
-        let value = CommandNode::literal(name);
-        value.execute_with_handler_id(base + offset);
-        target.then(value);
+    target.execute_with_handler_id(id);
+    for (offset, mode) in [(1, "on"), (2, "off")] {
+        node.then(literal(mode, id + offset));
+        target.then(literal(mode, id + offset));
     }
+    target.then(tail(id));
     node.then(target);
-    command.then(node);
+    node.then(tail(id));
+    node
 }
 
 /// Registers seven command trees, including their original GSit aliases and permission groups.
@@ -126,17 +147,19 @@ pub fn register(ctx: &Context) -> Result<(), String> {
             &names.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
             description,
         );
-        cmd.execute_with_handler_id(i as u32 + 1);
-        if i == 0 {
-            let help = CommandNode::literal("help");
-            help.execute_with_handler_id(HELP);
-            cmd.then(help);
-            toggle(&cmd, "toggle", TOGGLE);
-            toggle(&cmd, "playertoggle", TOGGLE + 10)
+        let id = i as u32 + 1;
+        let base = id * PREFIXES.len() as u32;
+        cmd.execute_with_handler_id(base);
+        if id == SIT {
+            cmd.then(literal("help", base + 7));
+            cmd.then(toggle_branch(base, 1));
+            if config().player_sit.allow_sit {
+                cmd.then(toggle_branch(base, 4));
+            }
+        } else if id == CRAWL && (config().crawl.corridor_crawl || config().crawl.double_sneak) {
+            cmd.then(toggle_branch(base, 1));
         }
-        if i == 5 {
-            toggle(&cmd, "toggle", TOGGLE + 20)
-        }
+        cmd.then(tail(base));
         ctx.register_command(cmd, &format!("PumpGsit:{perm}"));
     }
     Ok(())
@@ -152,67 +175,94 @@ pub fn default_for(feature: Preference) -> bool {
     }
 }
 
-/// Applies one preference operation and acknowledges it only after the database write succeeds.
-async fn preferences(
-    id: u32,
-    sender: &CommandSender,
-    server: &Server,
-    args: &ConsumedArgs,
-) -> Result<&'static str, &'static str> {
-    let (pref, node, on, off) = match (id - TOGGLE) / 10 {
-        0 => (Preference::Sit, "PumpGsit:sittoggle", "sit_on", "sit_off"),
-        1 => (
-            Preference::PlayerSit,
-            "PumpGsit:playersittoggle",
-            "stack_on",
-            "stack_off",
-        ),
-        _ => (
-            Preference::Crawl,
-            "PumpGsit:crawltoggle",
-            "crawl_on",
-            "crawl_off",
-        ),
-    };
-    if !sender.has_permission(node.into()).await {
-        return Err("permission");
+/// Matches a preference subcommand with its Bukkit command's case rules.
+fn preference(id: u32, word: &str) -> Option<Preference> {
+    match id {
+        SIT if word == "toggle" => Some(Preference::Sit),
+        SIT if word == "playertoggle" => Some(Preference::PlayerSit),
+        CRAWL if word.eq_ignore_ascii_case("toggle") => Some(Preference::Crawl),
+        _ => None,
     }
-    if (matches!(pref, Preference::PlayerSit) && !config().player_sit.allow_sit)
-        || (matches!(pref, Preference::Crawl)
-            && !config().crawl.corridor_crawl
-            && !config().crawl.double_sneak)
-    {
-        return Err("disabled");
-    }
-    let mode = (id - TOGGLE) % 10;
-    let target = match sender.as_player() {
-        Some(player) if mode < 3 => player.get_id(),
-        None if mode >= 3 => {
-            let Arg::Simple(text) = args.get_value("target") else {
-                return Err("target");
-            };
-            uuid::parse(&text)
-                .or_else(|| server.get_player_by_name(&text).map(|p| p.get_id()))
-                .ok_or("target")?
+}
+
+/// Checks the current gameplay switches and sender permissions before changing a preference.
+async fn can_toggle(pref: Preference, sender: &CommandSender) -> bool {
+    let cfg = config();
+    let node = match pref {
+        Preference::Sit => "PumpGsit:sittoggle",
+        Preference::PlayerSit if cfg.player_sit.allow_sit => "PumpGsit:playersittoggle",
+        Preference::Crawl if cfg.crawl.corridor_crawl || cfg.crawl.double_sneak => {
+            "PumpGsit:crawltoggle"
         }
-        _ => return Err("target"),
+        _ => return false,
     };
+    sender.has_permission(node.into()).await
+}
+
+/// Reads stored server identities available through the Wasm API, including offline entries.
+fn known_profiles(server: &Server) -> impl Iterator<Item = (String, uuid::Uuid)> {
+    let ops = server
+        .get_op_manager()
+        .list_ops()
+        .into_iter()
+        .map(|p| (p.name, p.uuid));
+    let whitelist = server
+        .get_whitelist_manager()
+        .list_entries()
+        .into_iter()
+        .map(|p| (p.name, p.uuid));
+    let bans = server
+        .get_ban_manager()
+        .list_player_bans()
+        .into_iter()
+        .map(|p| (p.name, p.uuid));
+    ops.chain(whitelist).chain(bans)
+}
+
+/// Resolves a console target by UUID, connected player or an unambiguous stored profile.
+fn target_id(name: &str, server: &Server) -> Option<uuid::Uuid> {
+    if let Some(id) = uuid::parse(name) {
+        return Some(id);
+    }
+    if let Some(player) = server.get_player_by_name(name) {
+        return Some(player.get_id());
+    }
+    let mut ids = known_profiles(server)
+        .filter(|(profile, _)| profile.eq_ignore_ascii_case(name))
+        .map(|(_, id)| id);
+    let id = ids.next()?;
+    ids.all(|other| (other.high, other.low) == (id.high, id.low))
+        .then_some(id)
+}
+
+/// Commits the preference before acknowledging it and invalidating cached gameplay state.
+fn preferences(
+    pref: Preference,
+    target: uuid::Uuid,
+    mode: Option<&str>,
+) -> Result<&'static str, &'static str> {
     let dir = data_dir();
     let key = uuid::to_string(target);
     let default = default_for(pref);
     let change = || -> Result<bool, String> {
-        let value = match mode % 3 {
-            0 => !storage::enabled(&dir, pref, &key, default)?,
-            1 => true,
-            _ => false,
+        let value = match mode {
+            Some(mode) if mode.eq_ignore_ascii_case("on") => true,
+            Some(mode) if mode.eq_ignore_ascii_case("off") => false,
+            _ => !storage::enabled(&dir, pref, &key, default)?,
         };
         storage::set_enabled(&dir, pref, &key, default, value)?;
         crate::forget_preferences(target);
         Ok(value)
     };
     match change() {
-        Ok(true) => Ok(on),
-        Ok(false) => Ok(off),
+        Ok(value) => Ok(match (pref, value) {
+            (Preference::Sit, true) => "command-gsit-toggle-on",
+            (Preference::Sit, false) => "command-gsit-toggle-off",
+            (Preference::PlayerSit, true) => "command-gsit-playertoggle-on",
+            (Preference::PlayerSit, false) => "command-gsit-playertoggle-off",
+            (Preference::Crawl, true) => "command-gcrawl-toggle-on",
+            (Preference::Crawl, false) => "command-gcrawl-toggle-off",
+        }),
         Err(error) => {
             crate::warn(&error);
             Err("db")
@@ -234,25 +284,25 @@ async fn posture(id: u32, player: &Player, server: &Server) -> Result<(), &'stat
         5 => (Activity::Spin, "PumpGsit:spin", Some(Pose::Spin)),
         CRAWL => {
             if !player.has_permission("PumpGsit:crawl".into()).await {
-                return Err("permission");
+                return Err("command-permission-error");
             }
             if crawl::active(player) {
                 crawl::stop(player).await;
                 return Ok(());
             }
             if !seat::allowed(player).await {
-                return Err("world");
+                return Err("action-crawl-world-error");
             }
             crawl::start(player)
                 .await
-                .map_err(|err| if err == "state" { "state" } else { "refused" })?;
-            hint(player, config().crawl.get_up_sneak);
+                .map_err(|_| "action-crawl-now-error")?;
+            hint(player, "action-crawl-info");
             return Ok(());
         }
         _ => return Err("state"),
     };
     if !player.has_permission(perm.into()).await {
-        return Err("permission");
+        return Err("command-permission-error");
     }
     if seat::activity(player) == Some(activity) {
         seat::stop(player, server, true).await;
@@ -261,16 +311,81 @@ async fn posture(id: u32, player: &Player, server: &Server) -> Result<(), &'stat
     if pose.is_some() && player.as_java().is_none() {
         return Err("edition");
     }
-    let surface = seat::start(player, server, activity, None).await?;
+    let surface = seat::start(player, server, activity, None)
+        .await
+        .map_err(|reason| match (pose.is_some(), reason) {
+            (false, "state") => "action-sit-now-error",
+            (false, "world") => "action-sit-world-error",
+            (false, "location") => "action-sit-location-error",
+            (false, "occupied") => "action-sit-kick-error",
+            (false, _) => "action-sit-error",
+            (true, "state") => "action-pose-now-error",
+            (true, "world") => "action-pose-world-error",
+            (true, "location") => "action-pose-location-error",
+            (true, "occupied") => "action-pose-kick-error",
+            (true, _) => "action-pose-error",
+        })?;
     if let Some(kind) = pose
         && let Err(error) = pose::start_at(player, kind, server, surface).await
     {
         crate::warn(&error);
         seat::stop(player, server, true).await;
-        return Err("refused");
+        return Err("action-pose-error");
     }
-    hint(player, config().get_up_sneak);
+    hint(
+        player,
+        if pose.is_some() {
+            "action-pose-info"
+        } else {
+            "action-sit-info"
+        },
+    );
     Ok(())
+}
+
+/// Handles preference arguments before falling back to the original command's posture checks.
+async fn execute<'a>(
+    id: u32,
+    sender: &CommandSender,
+    player: Option<&Player>,
+    server: &Server,
+    mut words: impl Iterator<Item = &'a str>,
+) -> Result<Option<&'static str>, &'static str> {
+    let first = words.next();
+    if id == SIT && first == Some("help") {
+        return Ok(Some("help"));
+    }
+    if id == RELOAD {
+        if !matches!(
+            sender.get_command_sender_type(),
+            CommandSenderType::Rcon | CommandSenderType::Console | CommandSenderType::Player(_)
+        ) {
+            return Err("command-sender-error");
+        }
+        if !sender.has_permission("PumpGsit:reload".into()).await {
+            return Err("command-permission-error");
+        }
+        return crate::reload(server)
+            .await
+            .map(|()| Some("plugin-reload"))
+            .map_err(|err| {
+                crate::warn(&err);
+                "bad_config"
+            });
+    }
+    if let Some(pref) = first.and_then(|word| preference(id, word))
+        && can_toggle(pref, sender).await
+    {
+        if let Some(player) = player {
+            return preferences(pref, player.get_id(), words.next()).map(Some);
+        }
+        if let Some(name) = words.next() {
+            let target = target_id(name, server).ok_or("target")?;
+            return preferences(pref, target, words.next()).map(Some);
+        }
+    }
+    posture(id, player.ok_or("command-sender-error")?, server).await?;
+    Ok(None)
 }
 
 /// Executes one registered handler and renders all responses in the sender's language.
@@ -281,27 +396,24 @@ pub async fn run(
     args: ConsumedArgs,
 ) -> Result<i32, CommandError> {
     let player = sender.as_player();
-    let reply = if id >= TOGGLE {
-        preferences(id, &sender, &server, &args).await.map(Some)
-    } else if id == HELP {
-        Ok(Some("help"))
-    } else if id == RELOAD {
-        if !sender.has_permission("PumpGsit:reload".into()).await {
-            Err("permission")
-        } else {
-            crate::reload(&server)
-                .await
-                .map(|()| Some("reload"))
-                .map_err(|err| {
-                    crate::warn(&err);
-                    "bad_config"
-                })
-        }
-    } else if let Some(ref p) = player {
-        posture(id, p, &server).await.map(|()| None)
-    } else {
-        Err("player")
+    let (Arg::Simple(target), Arg::Simple(args)) =
+        (args.get_value("target"), args.get_value("args"))
+    else {
+        return Ok(0);
     };
+    let (command, mode) = PREFIXES[id as usize % PREFIXES.len()];
+    let words = [command, target.as_str(), mode]
+        .into_iter()
+        .filter(|word| !word.is_empty())
+        .chain(args.split_ascii_whitespace());
+    let reply = execute(
+        id / PREFIXES.len() as u32,
+        &sender,
+        player.as_ref(),
+        &server,
+        words,
+    )
+    .await;
     match reply {
         Ok(Some(key)) => {
             sender.send_message(message(player.as_ref(), key));

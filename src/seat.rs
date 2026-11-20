@@ -7,7 +7,9 @@ use crate::{
         server::Server,
         world::{self, BlockDirection, BlockState, World},
     },
-    config, enabled, pose,
+    config,
+    config::MaterialRule,
+    enabled, pose,
     state::State,
     storage::Preference,
 };
@@ -16,6 +18,7 @@ use std::{
     sync::LazyLock,
 };
 
+const SEAT_BASE_HEIGHT: f64 = 0.025;
 const TAG: &str = "pumpgsit.seat.v1";
 const LEGACY_TAG: &str = "gsit.pumpkin.seat.v1";
 pub type Key = (i32, i32, i32);
@@ -47,6 +50,7 @@ struct Seat {
     had_support: bool,
     original: Position,
     surface: Position,
+    vehicle_y: f64,
     activity: Activity,
 }
 
@@ -54,7 +58,14 @@ type Riders<T> = LazyLock<State<HashMap<u32, T>>>;
 static SEATS: Riders<Seat> = LazyLock::new(State::default);
 // A movement callback is issued only after Pumpkin accepted the dismount acknowledgement.
 static RETURNS: Riders<(String, Position, bool)> = LazyLock::new(State::default);
-static PENDING: Riders<(String, Option<Key>)> = LazyLock::new(State::default);
+/// GSit tracks ordinary seats separately from its four stationary poses on a block.
+#[derive(Clone, Copy, PartialEq)]
+enum BlockUse {
+    Sit(Key),
+    Pose(Key),
+}
+
+static PENDING: Riders<(String, Option<BlockUse>)> = LazyLock::new(State::default);
 
 /// Holds an admission until every awaited spawn/mount callback has returned.
 struct Admission(u32);
@@ -66,7 +77,7 @@ impl Drop for Admission {
 }
 
 /// Reserves the player and optionally the block to prevent concurrent successful mounts.
-fn reserve(id: u32, world: &str, block: Option<Key>) -> Result<Admission, &'static str> {
+fn reserve(id: u32, world: &str, block: Option<BlockUse>) -> Result<Admission, &'static str> {
     let exclusive = block.is_some() && !config().same_block_rest;
     PENDING.with_borrow_mut(|map| {
         if map.contains_key(&id)
@@ -89,6 +100,17 @@ pub fn activity_by_id(id: u32) -> Option<Activity> {
     SEATS.with_borrow(|m| m.get(&id).map(|s| s.activity))
 }
 
+/// Applies the command blacklist to seated players and either end of a player stack.
+pub fn uses_command_blacklist(player: &Player) -> bool {
+    let id = player.as_entity().get_id();
+    SEATS.with_borrow(|seats| {
+        seats.contains_key(&id)
+            || seats
+                .values()
+                .any(|seat| seat.activity == Activity::PlayerSit && seat.vehicle == id)
+    })
+}
+
 /// Returns whether another plugin or player has cancelled or replaced this ride.
 fn mounted(player: &Player, vehicle: u32) -> bool {
     player
@@ -97,30 +119,20 @@ fn mounted(player: &Player, vehicle: u32) -> bool {
         .is_some_and(|e| e.get_id() == vehicle)
 }
 
-/// Resolves a Bukkit material, tag, or block-state predicate, stripping any seat offset.
-fn matches(rule: &str, state: &BlockState, props: &[(String, String)]) -> bool {
-    let spec = rule
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_lowercase();
-    let (key, conditions) = spec.split_once('[').unwrap_or((&spec, ""));
-    let name = state.block_name.trim_start_matches("minecraft:");
-    let matches_name = if key.starts_with('#') {
-        world::is_block_in_tag(&state.block_name, key)
+/// Matches the material or tag and resolves omitted block properties to their vanilla defaults.
+fn matches(rule: &MaterialRule, state: &BlockState) -> bool {
+    let name = &rule.name;
+    let matches_material = if name.starts_with('#') {
+        world::is_block_in_tag(&state.block_name, name)
     } else {
-        key.trim_start_matches("minecraft:") == name
+        name.trim_start_matches("minecraft:") == state.block_name.trim_start_matches("minecraft:")
     };
-    matches_name
-        && (conditions.is_empty()
-            || conditions.strip_suffix(']').is_some_and(|s| {
-                s.split(',').all(|pair| {
-                    pair.split_once('=').is_some_and(|(k, v)| {
-                        props.iter().any(|(a, b)| a == k.trim() && b == v.trim())
-                    })
-                })
-            }))
+    matches_material
+        && rule.properties.as_ref().is_none_or(|properties| {
+            // The host resolver ignores unknown properties. Reject them, as Bukkit does.
+            properties.iter().all(|p| state.properties.contains(p))
+                && world::resolve_block_state(&state.block_name, properties) == Some(state.id)
+        })
 }
 
 /// Checks world lists by configured world name or Minecraft dimension key.
@@ -219,23 +231,21 @@ pub async fn start(
         .unwrap_or_else(|| supporting_block(&world, original));
     let key = (pos.x, pos.y, pos.z);
     let state = world.get_block_state(pos);
-    let props = world::get_block_properties(state.id);
+    let props = &state.properties;
     let selected = cfg
         .sit
         .materials
         .iter()
-        .find(|rule| matches(rule, &state, &props));
+        .filter(|rule| matches(rule, &state))
+        // GSit looks up exact BlockData before Material. The last assignment in each map wins.
+        .max_by_key(|rule| rule.properties.is_some());
     if click.is_some()
         && (selected.is_none()
             || (cfg.sit.empty_hand_only && player.get_item_in_hand(Hand::Right).is_some()))
     {
         return Err("location");
     }
-    if cfg
-        .material_blacklist
-        .iter()
-        .any(|r| matches(r, &state, &props))
-    {
+    if cfg.material_blacklist.iter().any(|r| matches(r, &state)) {
         return Err("location");
     }
     let center = (
@@ -286,7 +296,7 @@ pub async fn start(
         (click.map(|c| c.1).unwrap_or(original), rider.get_yaw())
     };
     if stairs && prop("half", "bottom") && kind == Activity::Sit {
-        let (x, z, angle) = stair_offset(&props);
+        let (x, z, angle) = stair_offset(props);
         surface = (center.0 + x, f64::from(pos.y) + 0.5, center.2 + z);
         yaw = angle;
     }
@@ -305,17 +315,25 @@ pub async fn start(
         surface = (center.0 + x, f64::from(pos.y) + height, center.2 + z);
         yaw = angle;
     }
-    let height_offset = selected
-        .and_then(|s| s.rsplit_once(';'))
-        .and_then(|(_, v)| v.trim().parse::<f64>().ok())
-        .unwrap_or(0.0);
+    let height_offset = selected.map_or(0.0, |rule| rule.offset);
+    let resting_surface = (surface.0, surface.1 + height_offset, surface.2);
+    let vehicle_y = resting_surface.1 + SEAT_BASE_HEIGHT;
     let name = world.get_id();
-    let _guard = reserve(rider.get_id(), &name, Some(key))?;
+    let block_use = if kind.is_pose() {
+        BlockUse::Pose(key)
+    } else {
+        BlockUse::Sit(key)
+    };
+    let _guard = reserve(rider.get_id(), &name, Some(block_use))?;
     forget_return(rider.get_id());
     if !cfg.same_block_rest {
         let occupied = SEATS.with_borrow(|m| {
             m.values()
-                .filter(|s| s.block == Some(key) && s.world == name)
+                .filter(|s| {
+                    s.block == Some(key)
+                        && s.world == name
+                        && s.activity.is_pose() == kind.is_pose()
+                })
                 .cloned()
                 .collect::<Vec<_>>()
         });
@@ -340,7 +358,7 @@ pub async fn start(
     let vehicle = world
         .spawn_entity(
             EntityType::BlockDisplay,
-            (surface.0, surface.1 + 0.025 + height_offset, surface.2),
+            (resting_surface.0, vehicle_y, resting_surface.2),
         )
         .await;
     if world.get_entity_by_uuid(vehicle.get_uuid()).is_none() {
@@ -361,6 +379,10 @@ pub async fn start(
         return Err("refused");
     }
     vehicle.add_scoreboard_tag(TAG);
+    // The bottom step is suitable for the model, but a standing player needs full headroom.
+    if kind == Activity::Sit && stairs && prop("half", "bottom") {
+        surface.1 = f64::from(pos.y) + height;
+    }
     let seat = Seat {
         rider: rider.get_id(),
         rider_uuid: player.get_id(),
@@ -370,10 +392,11 @@ pub async fn start(
         had_support: !state.is_air,
         original,
         surface,
+        vehicle_y,
         activity: kind,
     };
     SEATS.with_borrow_mut(|m| m.insert(seat.rider, seat));
-    Ok(surface)
+    Ok(resting_surface)
 }
 
 /// Checks the optional Euclidean distance limit in blocks.
@@ -475,6 +498,7 @@ pub async fn stack(player: &Player, target_id: u32, server: &Server) -> bool {
     if !mounted(player, vehicle_id) {
         return false;
     }
+    let surface = vehicle.get_position();
     let seat = Seat {
         rider: rider.get_id(),
         rider_uuid: player.get_id(),
@@ -483,60 +507,102 @@ pub async fn stack(player: &Player, target_id: u32, server: &Server) -> bool {
         block: None,
         had_support: false,
         original,
-        surface: vehicle.get_position(),
+        surface,
+        vehicle_y: surface.1,
         activity: Activity::PlayerSit,
     };
     SEATS.with_borrow_mut(|m| m.insert(seat.rider, seat));
     true
 }
 
-/// Dismounts only the tracked vehicle and restores the pose and optional return position.
+/// Selects the saved starting position, the standing surface, or the base of a player stack.
+fn return_position(seat: &Seat, world: &World, disconnect: bool) -> Option<Position> {
+    let cfg = config();
+    if seat.block.is_some() {
+        let mut position = if cfg.get_up_return {
+            seat.original
+        } else {
+            seat.surface
+        };
+        if disconnect {
+            // Paper dismounts the departing passenger no lower than the removed vehicle.
+            position.1 = position.1.max(seat.vehicle_y);
+        }
+        return Some(position);
+    }
+    if !cfg.player_sit.bottom_return {
+        return None;
+    }
+    let mut bottom = world.get_entity_by_id(seat.vehicle as i32)?;
+    let mut visited = HashSet::new();
+    while visited.insert(bottom.get_id())
+        && let Some(parent) = bottom.get_vehicle()
+    {
+        bottom = parent;
+    }
+    Some(bottom.get_position())
+}
+
+/// Removes only the tagged display owned by this session and closes its pose for all viewers.
+async fn remove_visuals(seat: &Seat, player: &Player, server: &Server) {
+    if seat.activity.is_pose() {
+        pose::stop(player, server).await;
+    }
+    if seat.block.is_some()
+        && let Some(world) = server.get_world_by_name(&seat.world)
+        && let Some(entity) = world.get_entity_by_id(seat.vehicle as i32)
+        && entity.has_scoreboard_tag(TAG)
+    {
+        entity.remove();
+    }
+}
+
+/// Dismounts the tracked vehicle and waits for acknowledged movement before returning a live player.
 pub async fn stop(player: &Player, server: &Server, reposition: bool) {
     let id = player.as_entity().get_id();
     let Some(seat) = SEATS.with_borrow_mut(|m| m.remove(&id)) else {
         return;
     };
+    let world = player.get_world();
+    if reposition
+        && world.get_id() == seat.world
+        && let Some(location) = return_position(&seat, &world, false)
+    {
+        // Keep this available to the leave callback even if the player quits during dismount.
+        RETURNS.with_borrow_mut(|m| m.insert(id, (seat.world.clone(), location, false)));
+    }
     if mounted(player, seat.vehicle) {
         player.as_entity().set_vehicle(None).await;
         if mounted(player, seat.vehicle) {
+            forget_return(id);
             SEATS.with_borrow_mut(|m| m.insert(id, seat));
             return;
         }
     }
-    if !matches!(seat.activity, Activity::Sit | Activity::PlayerSit) {
-        pose::stop(player, server).await
+    remove_visuals(&seat, player, server).await;
+}
+
+/// Restores the standing position during the leave callback, before Pumpkin saves the player's NBT.
+pub async fn disconnect(player: &Player, server: &Server) {
+    let id = player.as_entity().get_id();
+    let seat = SEATS.with_borrow_mut(|m| m.remove(&id));
+    let pending = RETURNS.with_borrow_mut(|m| m.remove(&id));
+    let world = player.get_world();
+    let name = world.get_id();
+    let position = match &seat {
+        Some(seat) if seat.world == name => return_position(seat, &world, true),
+        _ => pending
+            .filter(|(w, _, _)| w == &name)
+            .map(|(_, pos, _)| pos),
+    };
+    // Pumpkin already unlinked the passenger. A departing client cannot acknowledge a dismount.
+    if let Some(position) = position {
+        player.teleport(position, None, None, world).await;
     }
-    if let Some(world) = server.get_world_by_name(&seat.world) {
-        if seat.block.is_some()
-            && let Some(e) = world.get_entity_by_id(seat.vehicle as i32)
-            && e.has_scoreboard_tag(TAG)
-        {
-            e.remove()
-        }
-        let cfg = config();
-        if reposition
-            && player.get_world().get_id() == seat.world
-            && (seat.block.is_some() || cfg.player_sit.bottom_return)
-        {
-            let location = if seat.block.is_none() {
-                let Some(mut bottom) = world.get_entity_by_id(seat.vehicle as i32) else {
-                    return;
-                };
-                let mut visited = HashSet::new();
-                while visited.insert(bottom.get_id())
-                    && let Some(parent) = bottom.get_vehicle()
-                {
-                    bottom = parent;
-                }
-                bottom.get_position()
-            } else if cfg.get_up_return {
-                seat.original
-            } else {
-                seat.surface
-            };
-            RETURNS.with_borrow_mut(|m| m.insert(id, (seat.world, location, false)));
-        }
+    if let Some(seat) = seat {
+        remove_visuals(&seat, player, server).await;
     }
+    eject(player, server).await;
 }
 
 /// Marks a pending return safe after Pumpkin accepts a real position change from this player.
@@ -575,9 +641,16 @@ pub async fn eject(player: &Player, server: &Server) {
 
 /// Reconciles completed vanilla dismounts and supporting blocks changed by players or the world.
 pub async fn reconcile(server: &Server) {
-    let ready = RETURNS.with_borrow_mut(|m| m.extract_if(|_, entry| entry.2).collect::<Vec<_>>());
-    for (id, (world, location, _)) in ready {
+    let ready = RETURNS.with_borrow(|m| {
+        m.iter()
+            .filter(|(_, entry)| entry.2)
+            .map(|(&id, _)| id)
+            .collect::<Vec<_>>()
+    });
+    for id in ready {
+        // World removal precedes the leave callback. Preserve its return until that callback runs.
         if let Some(player) = player_by_id(server, id)
+            && let Some((world, location, _)) = RETURNS.with_borrow_mut(|m| m.remove(&id))
             && player.as_entity().get_vehicle().is_none()
             && player.get_world().get_id() == world
         {
@@ -596,15 +669,6 @@ pub async fn reconcile(server: &Server) {
                 });
             if !mounted(&p, seat.vehicle) || lost_support {
                 stop(&p, server, true).await
-            }
-        } else {
-            SEATS.with_borrow_mut(|m| m.remove(&seat.rider));
-            forget_return(seat.rider);
-            if seat.block.is_some()
-                && let Some(world) = server.get_world_by_name(&seat.world)
-                && let Some(vehicle) = world.get_entity_by_id(seat.vehicle as i32)
-            {
-                cleanup_entities(vec![vehicle]);
             }
         }
     }

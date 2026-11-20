@@ -6,6 +6,7 @@ mod bindings {
 mod command;
 mod config;
 mod crawl;
+mod language;
 mod pie;
 mod pose;
 mod seat;
@@ -13,10 +14,9 @@ mod state;
 mod storage;
 
 use bindings::pumpkin::plugin::{
-    common::{GameMode, Locale},
+    common::GameMode,
     event::{EntityInteractionAction, EventPriority, EventType, InteractAction},
     gametest::{self, BlockPermutation, Test},
-    i18n,
     logging::{self, Level},
     player::Player,
     scheduler,
@@ -84,50 +84,39 @@ fn forget_preferences(id: uuid::Uuid) {
         }
     });
 }
-/// Fails closed when the player's legacy database cannot be read.
+/// Matches GSit's enabled fallback on a read error without caching the failed query.
 fn enabled(player: &Player, feature: Preference) -> bool {
-    online_preference(player, feature).unwrap_or_else(|err| {
-        warn(&err);
-        false
+    legacy_read(online_preference(player, feature))
+}
+
+/// GSit logs failed preference reads and allows the interaction until a later query succeeds.
+fn legacy_read(result: Result<bool, String>) -> bool {
+    result.unwrap_or_else(|error| {
+        warn(&error);
+        true
     })
 }
 
-/// Resolves a server-side language key using the recipient's client locale with English fallback.
+/// Resolves a message using the recipient's locale and the configured fallback.
 fn message(player: Option<&Player>, key: &str) -> TextComponent {
     let cfg = config();
-    let code = if cfg.client_language {
-        player
-            .map(Player::get_locale)
-            .unwrap_or_else(|| cfg.language.clone())
-    } else {
-        cfg.language.clone()
-    };
-    let lang = if code.replace('-', "_").eq_ignore_ascii_case("zh_cn") {
-        "zh_cn"
-    } else {
-        "en_us"
-    };
-    // This host maps the WIT ZhCn enum to an unrecognized "zhcn"; keep both tables independently addressable.
-    TextComponent::text(&i18n::translate(
-        &format!("pumpgsit.{lang}:{key}"),
-        Locale::EnUs,
-    ))
+    let client = player
+        .filter(|_| cfg.client_language)
+        .map(Player::get_locale);
+    language::message(client, &cfg.language, key)
 }
 
-/// Displays the configured get-up hint only after the host accepted an action.
-fn hint(player: &Player, sneak: bool) {
+/// Sends the appropriate upstream action-bar message after the host accepts a posture.
+fn hint(player: &Player, key: &str) {
     if config().custom_message {
-        player.send_system_message(
-            message(Some(player), if sneak { "hint" } else { "up" }),
-            true,
-        )
+        player.send_system_message(message(Some(player), key), true);
     }
 }
 /// Checks whether this player's active seat currently renders a PumpGsit pose.
 fn posing(player: &Player) -> bool {
     seat::activity(player).is_some_and(Activity::is_pose)
 }
-/// Clears the player's owned effects without relocating a dead, teleporting or disconnecting player.
+/// Clears owned effects without relocating a dead or teleporting player.
 async fn cleanup(player: &Player, server: &Server) {
     seat::forget_return(player.as_entity().get_id());
     crawl::cleanup(player).await;
@@ -143,9 +132,11 @@ async fn cleanup_all(server: &Server) {
 /// Loads and validates the new file before touching running sessions.
 async fn reload(server: &Server) -> Result<(), String> {
     let config = config::read(&data_dir())?;
+    let translations = language::read(&data_dir())?;
     storage::initialize(&data_dir())?;
     cleanup_all(server).await;
     PREFERENCES.with_borrow_mut(HashMap::clear);
+    language::install(translations, &config.language);
     SETTINGS.set(Some(Arc::new(config)));
     Ok(())
 }
@@ -198,7 +189,7 @@ async fn dispatch(server: &Server, event: &mut Event) {
                     .is_ok()
             {
                 e.cancelled = true;
-                hint(&e.player, config().get_up_sneak);
+                hint(&e.player, "action-sit-info");
             }
         }
         Event::PlayerInteractEntityEvent(e) if !e.cancelled => {
@@ -211,7 +202,7 @@ async fn dispatch(server: &Server, event: &mut Event) {
                 && seat::stack(&e.player, e.entity_id as u32, server).await
             {
                 e.cancelled = true;
-                hint(&e.player, true);
+                hint(&e.player, "action-playersit-info");
             }
         }
         Event::PlayerToggleSneakEvent(e) if !e.cancelled => {
@@ -252,7 +243,8 @@ async fn dispatch(server: &Server, event: &mut Event) {
         }
         Event::PlayerLeaveEvent(e) => {
             forget_preferences(e.player.get_id());
-            cleanup(&e.player, server).await;
+            crawl::cleanup(&e.player).await;
+            seat::disconnect(&e.player, server).await;
         }
         Event::PlayerDeathEvent(e) if !e.cancelled => cleanup(&e.player, server).await,
         Event::PlayerTeleportEvent(e) if !e.cancelled => {
@@ -340,9 +332,6 @@ async fn dispatch(server: &Server, event: &mut Event) {
 
 /// Applies the command blacklist during active PumpGsit actions with the upstream bypass.
 async fn blocked(player: &Player, command: &str) -> bool {
-    if seat::activity(player).is_none() && !crawl::active(player) {
-        return false;
-    }
     let name = command
         .trim_start_matches('/')
         .split_whitespace()
@@ -353,11 +342,12 @@ async fn blocked(player: &Player, command: &str) -> bool {
         .iter()
         .any(|cmd| name.eq_ignore_ascii_case(cmd.trim_start_matches('/')));
     if denied
+        && seat::uses_command_blacklist(player)
         && !player
             .has_permission("PumpGsit:bypass.command".into())
             .await
     {
-        player.send_system_message(message(Some(player), "blocked"), false);
+        player.send_system_message(message(Some(player), "action-blocked-error"), false);
         true
     } else {
         false
@@ -388,17 +378,8 @@ impl Guest for PumpGsit {
         let dir = PathBuf::from(ctx.get_data_folder());
         let cfg = config::read(&dir)?;
         storage::initialize(&dir)?;
+        language::install(language::read(&dir)?, &cfg.language);
         SETTINGS.set(Some(Arc::new(cfg)));
-        i18n::load_translations(
-            "pumpgsit.en_us",
-            include_str!("../lang/en_us.json"),
-            Locale::EnUs,
-        );
-        i18n::load_translations(
-            "pumpgsit.zh_cn",
-            include_str!("../lang/zh_cn.json"),
-            Locale::EnUs,
-        );
         let ctx = Arc::new(ctx);
         HOST.set(Some(Arc::clone(&ctx)));
         command::register(&ctx)?;
@@ -438,15 +419,15 @@ impl Guest for PumpGsit {
     ) -> Result<i32, CommandError> {
         command::run(id, sender, server, args).await
     }
-    /// All fixed arguments are provided as Brigadier literals.
+    /// Native Brigadier literals supply completions without invoking the guest on simulation threads.
     async fn handle_command_suggestion(
         _: u32,
         _: CommandSender,
         _: Server,
-        r: SuggestionRequest,
+        request: SuggestionRequest,
     ) -> CommandSuggestions {
         CommandSuggestions {
-            start: r.cursor,
+            start: request.cursor,
             length: 0,
             values: vec![],
         }

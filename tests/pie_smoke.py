@@ -42,7 +42,7 @@ def exercise(server, component, provider, root):
         command("pie expansions", "%gsit%  from PumpGsit:")
         command(f"pie parse NoViewer={BARE}", f"NoViewer={BARE}")
         command("pie parse Bad=%gsit_toggle:unknown-name%", "unresolved: gsit_toggle")
-        command(f"sit toggle {PLAYER} on", "Click-to-sit enabled.")
+        command(f"sit toggle {PLAYER} on", "have enabled")
         command(f"pie parse Changed={TARGETED}", f"Changed={MODIFIED}")
         command("plugin unload PumpkinPIE", "unloaded successfully")
         command("sit help", "Repeat the current command")

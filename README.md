@@ -11,6 +11,8 @@
 
 正式版与每夜版均提供 `PumpGsit.wasm` 和 `SHA256SUMS`。将两份文件下载到同一目录后执行 `sha256sum -c SHA256SUMS`，应显示 `PumpGsit.wasm: OK`。
 
+当前主分支包含 v0.1.2 之后的退出坐标和 SQLite 兼容修复。可从对应提交的 [Build](https://github.com/Q2297045667/PumpGsit/actions/workflows/build.yml) 下载 `PumpGsit` 构建产物，或使用包含该提交的每夜版。
+
 ## 安装
 
 1. 使用启用 `plugin-v0_2` 的 Pumpkin。目标服务端是 `0.2.2+26.3-26.63`，提交 `e318ec5ff87bbd0d72feafe40d6b24f230a8b84a`，Java 客户端为 **26.3（协议 777）**。从该提交构建服务端时运行 `cargo build --locked --release -p pumpkin --features plugin-v0_2`。
@@ -23,14 +25,15 @@
    allowed_permissions = ["fs.read.data", "fs.write.data"]
    ```
 
-4. 启动后，检查控制台有 `Loaded PumpGsit` 及所装版本号。输入 `pumpgsitreload`，默认英文回复为 `PumpGsit configuration reloaded.`。玩家可站在完整方块上执行 `/sit`，在第三人称观察弯膝坐姿，再按潜行键起身。
-5. 配置文件位于 `plugins/data/PumpGsit/config.toml`，玩家偏好位于 `plugins/data/PumpGsit/data/data.db`。
+4. 启动后，检查控制台有 `Loaded PumpGsit` 及所装版本号。输入 `pumpgsitreload`，主分支使用原版英文提示 `[GSit] The plugin was successfully reloaded.`。玩家可站在完整方块上执行 `/sit`，在第三人称观察弯膝坐姿，再按潜行键起身。
+5. 配置文件位于 `plugins/data/PumpGsit/config.toml`，玩家偏好位于 `plugins/data/PumpGsit/data/data.db`。主分支可沿用旧服的 `lang/*.yml`。
 
 ## 文档
 
 - [命令、别名、权限与 TOML 配置](doc/使用与配置.md)
 - [六个占位符与可选联动](doc/占位符.md)
 - [旧库备份、迁移、核验与回滚](doc/存储.md)
+- [GSit 3.8.0 实服对照、v0.1.2 审计及修复验收](doc/原版兼容性审计.md)
 - [构建、发布、功能对照与已知差异](doc/构建与验证.md)
 - [Java 客户端验收与截图](doc/客户端验证.md)
 - [姿势实现与协议验证](doc/姿势.md)

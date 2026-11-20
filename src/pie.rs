@@ -123,15 +123,15 @@ fn resolve(callback: &Callback) -> Result<Option<bool>, String> {
         _ => return Ok(None),
     };
     if let Some(player) = player {
-        return crate::online_preference(&player, preference).map(Some);
+        return Ok(Some(crate::enabled(&player, preference)));
     }
-    storage::enabled(
+    let value = storage::enabled(
         &data_dir(),
         preference,
         &uuid::to_string(id),
         default_for(preference),
-    )
-    .map(Some)
+    );
+    Ok(Some(crate::legacy_read(value)))
 }
 
 /// Answers an authenticated PIE callback, declining missing viewers and undeclared names.

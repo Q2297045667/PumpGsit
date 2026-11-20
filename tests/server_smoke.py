@@ -110,33 +110,46 @@ def row_count(db, player=PLAYER):
 
 
 def exercise(args, root):
-    """Check a new install, idempotent preferences, reload rollback, and a restarted old database."""
+    """Check a new install, repeated explicit preferences, reload rollback, and a restarted old database."""
     root.mkdir(parents=True, exist_ok=True)
     data = root / "plugins/data/PumpGsit"
     db = data / "data/data.db"
     with boot(args.server, args.component, root, "fresh") as cmd:
-        cmd("sit", "Run this command as a player.")
+        cmd("sit", "can't run this command")
         cmd("pumpgsit help", "Repeat the current command")
         cmd("gsit help", "Repeat the current command")
         cmd("plugin unload PumpGsit", "Plugin PumpGsit unloaded successfully")
         shutil.copyfile(args.component, root / "reload.wasm")
         cmd("plugin load reload.wasm", "Plugin reload.wasm loaded successfully")
         cmd("sit help", "Repeat the current command")
-        cmd("pumpgsitreload", "PumpGsit configuration reloaded.")
+        cmd("pumpgsitreload", "plugin was successfully reloaded")
         cmd("gsit toggle unknown-offline-name on", "original player's UUID")
         for _ in range(2):
-            cmd(f"sit toggle {PLAYER} off", "Click-to-sit disabled.")
+            cmd(f"sit toggle {PLAYER} off", "have disabled")
+        langs = data / "lang"
+        assert len(list(langs.glob("*.yml"))) == 19
+        english = langs / "en_us.yml"
+        original = english.read_text()
+        english.write_text(original.replace("The plugin was successfully reloaded.", "Applied custom EN."))
+        cmd("gsitreload", "Applied custom EN.")
+        english.write_text("Messages: [invalid")
+        cmd("gsitreload", "previous settings are still active")
+        english.write_text(original)
         cfg = data / "config.toml"
         valid = cfg.read_text()
         cfg.write_text("invalid [")
         cmd("gsitreload", "previous settings are still active")
+        cfg.write_text(valid.replace('language = "en_us"', 'language = "de_de"'))
+        cmd("gsitrl", "Das Plugin wurde erfolgreich neu geladen")
+        cfg.write_text(valid.replace('language = "en_us"', 'language = "unknown_locale"'))
+        cmd("gsitrl", "plugin was successfully reloaded")
         cfg.write_text(valid.replace('language = "en_us"', 'language = "zh_cn"'))
-        cmd("gsitrl", "PumpGsit 配置已重新加载")
-        cmd("glayback", "请以玩家身份")
+        cmd("gsitrl", "插件已成功重载")
+        cmd("glayback", "当前发送人不能执行此命令")
     assert {entry.name for entry in data.parent.iterdir()} == {"PumpGsit"}
-    assert row_count(db) == 1
+    assert row_count(db) == 2
     with boot(args.server, args.component, root, "restart") as cmd:
-        cmd(f"sit toggle {PLAYER}", "已开启右键方块坐下")
+        cmd(f"sit toggle {PLAYER}", "你可以通过右键坐下了")
     assert row_count(db) == 0
     check_upgrade(args, root / "upgrade", cfg)
     print(f"Passed fresh install, aliases, console, SQLite, reload, i18n, restart and upgrade in {root}")
@@ -156,12 +169,12 @@ def check_upgrade(args, root, config):
     with sqlite3.connect(db) as src:
         old_uuid, = src.execute(f"SELECT uuid FROM {TABLE} LIMIT 1").fetchone()
     with boot(args.server, args.component, root, "legacy") as cmd:
-        cmd(f"sit toggle {old_uuid}", "已开启右键方块坐下")
+        cmd(f"sit toggle {old_uuid}", "你可以通过右键坐下了")
     with sqlite3.connect(db) as conn:
         assert conn.execute(f"SELECT count(*) FROM {TABLE} WHERE uuid=?", (old_uuid,)).fetchone()[0] == 0
         assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
     with boot(args.server, args.component, root, "post-upgrade") as cmd:
-        cmd(f"sit toggle {old_uuid}", "已关闭右键方块坐下")
+        cmd(f"sit toggle {old_uuid}", "你不能通过右键坐下了")
     assert row_count(db, old_uuid) == 1
     assert {entry.name for entry in data.parent.iterdir()} == {"PumpGsit"}
 
