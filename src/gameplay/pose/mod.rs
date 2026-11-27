@@ -22,7 +22,6 @@ use std::{
 };
 
 const MARKER_TAG: &str = "pumpgsit.pose_marker";
-const LEGACY_MARKER_TAG: &str = "gsit.pose_marker";
 
 /// An original GSit stationary player pose.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -407,7 +406,7 @@ impl Session {
         let range = f64::from(server.get_simulation_distance()) * 16.;
         let owner_flags = flags(&owner.as_entity());
         let yaw = owner.get_yaw();
-        let mut retained = BTreeSet::new();
+        let mut retained = Vec::new();
         let previous = self.equipment.with_borrow(Clone::clone);
         let (gear, gear_changed) = match previous {
             Some(old) if !tick.is_multiple_of(5) => (old, false),
@@ -469,10 +468,13 @@ impl Session {
             {
                 continue;
             }
-            retained.insert(id);
-            let since = self
-                .viewers
-                .with_borrow_mut(|viewers| *viewers.entry(id).or_insert(tick));
+            let since = self.viewers.with_borrow_mut(|viewers| {
+                if retained.is_empty() {
+                    retained.reserve_exact(viewers.len().max(1));
+                }
+                *viewers.entry(id).or_insert(tick)
+            });
+            retained.push(id);
             let age = tick.wrapping_sub(since);
             if age == 0 {
                 self.introduce(&viewer, &java).await;
@@ -508,9 +510,10 @@ impl Session {
                 );
             }
         }
+        retained.sort_unstable();
         let gone: Vec<_> = self.viewers.with_borrow_mut(|viewers| {
             viewers
-                .extract_if(.., |id, _| !retained.contains(id))
+                .extract_if(.., |id, _| retained.binary_search(id).is_err())
                 .map(|(id, _)| id)
                 .collect()
         });
@@ -682,11 +685,9 @@ pub async fn tick(server: &Server) {
     }
 }
 
-/// Recognizes a marker left behind by an interrupted session, including one saved before the plugin rename.
+/// Recognizes a marker left behind by an interrupted pose session.
 pub fn is_orphan(entity: &Entity) -> bool {
-    if !matches!(entity.get_type(), EntityType::Marker)
-        || !(entity.has_scoreboard_tag(MARKER_TAG) || entity.has_scoreboard_tag(LEGACY_MARKER_TAG))
-    {
+    if !matches!(entity.get_type(), EntityType::Marker) || !entity.has_scoreboard_tag(MARKER_TAG) {
         return false;
     }
     let marker = key(entity.get_uuid());

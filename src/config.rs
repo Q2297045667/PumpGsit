@@ -9,7 +9,6 @@ use std::{
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    #[serde(default)]
     pub database: Database,
     pub language: String,
     pub client_language: bool,
@@ -32,29 +31,20 @@ pub struct Config {
     pub crawl: Crawl,
 }
 
-/// Connection settings selected by the operator. Old configurations use the original SQLite file.
+/// Connection settings for the player preference store.
 #[derive(Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum Database {
     Sqlite {
-        #[serde(default = "legacy_sqlite_path")]
+        #[serde(default = "default_sqlite_path")]
         path: PathBuf,
     },
     Mysql(MySqlConfig),
 }
 
-/// Returns the same relative path used by earlier PumpGsit releases.
-fn legacy_sqlite_path() -> PathBuf {
+/// Returns the default preference database path inside the plugin data directory.
+fn default_sqlite_path() -> PathBuf {
     "data/data.db".into()
-}
-
-impl Default for Database {
-    /// Selects SQLite when an existing configuration predates backend selection.
-    fn default() -> Self {
-        Self::Sqlite {
-            path: legacy_sqlite_path(),
-        }
-    }
 }
 
 /// MySQL authenticates the server and verifies the host name unless explicitly disabled.
@@ -281,21 +271,29 @@ mod tests {
         read(dir.path())
     }
 
-    /// Both new installations and configurations predating backend selection use GSit's original file.
+    /// SQLite uses the same file with an explicit path or when only its backend is set.
     #[test]
-    fn new_and_legacy_configs_use_the_original_sqlite_path() {
+    fn sqlite_defaults_to_the_plugin_data_file() {
         let dir = tempdir().unwrap();
         let fresh = read(dir.path()).unwrap();
         assert!(dir.path().join("config.toml").is_file());
 
-        let mut legacy = defaults();
-        legacy.remove("database");
-        let previous = read_text(&toml::to_string(&legacy).unwrap()).unwrap();
-        for config in [fresh, previous] {
+        let mut settings = defaults();
+        settings["database"].as_table_mut().unwrap().remove("path");
+        let without_path = read_text(&toml::to_string(&settings).unwrap()).unwrap();
+        for config in [fresh, without_path] {
             assert!(
                 matches!(config.database, Database::Sqlite { path } if path == Path::new("data/data.db"))
             );
         }
+    }
+
+    /// Configuration files must declare which preference backend they use.
+    #[test]
+    fn requires_database_section() {
+        let mut settings = defaults();
+        settings.remove("database");
+        assert!(read_text(&toml::to_string(&settings).unwrap()).is_err());
     }
 
     /// Operators may nest SQLite files under the data directory but cannot select a parent or root path.

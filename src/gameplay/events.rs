@@ -14,7 +14,7 @@ use crate::{
             server::Server,
         },
     },
-    config, hint, message, preferences,
+    config, hint, message, preferences, warn,
 };
 
 /// Checks whether this player's active seat currently renders a PumpGsit pose.
@@ -22,139 +22,153 @@ fn posing(player: &Player) -> bool {
     seat::activity(player).is_some_and(Activity::is_pose)
 }
 
-/// Registers only event callbacks used by the gameplay implementation.
-pub(crate) fn register(ctx: &Context) {
-    use EventType::*;
-    for ty in [
-        PlayerInteractEvent,
-        PlayerInteractEntityEvent,
-        PlayerToggleSneakEvent,
-        PlayerMoveEvent,
-        EntityToggleSwimEvent,
-        EntityDismountEvent,
-        PlayerDeathEvent,
-        PlayerLeaveEvent,
-        PlayerChangeWorldEvent,
-        PlayerTeleportEvent,
-        PlayerGamemodeChangeEvent,
-        PlayerToggleFlightEvent,
-        PlayerCommandPreprocessEvent,
-        PlayerCommandSendEvent,
-        EntityDamageEvent,
-        EntityDamageByEntityEvent,
-        ProjectileLaunchEvent,
-        InventoryClickEvent,
-        InventoryCreativeEvent,
-        PlayerDropItemEvent,
-        PlayerAnimationEvent,
-        EntitiesLoadEvent,
-    ] {
-        ctx.register_event(1, ty, EventPriority::Highest, true)
-    }
+// The resource has no type query. Use each event type as its callback ID so registration
+// and dispatch share one list. A handler with a setter returns whether to cancel the event.
+macro_rules! listeners {
+    ($server:ident; $($kind:ident => $get:ident $(, $set:ident($value:expr))? : |$data:ident| $body:block)+) => {
+        /// Registers each listener with its event type as the callback ID.
+        pub(crate) fn register(ctx: &Context) {
+            $(ctx.register_event(EventType::$kind as u32, EventType::$kind, EventPriority::Highest, true);)+
+        }
+
+        /// Reads the event payload and writes back a cancellation when the handler requests one.
+        pub(crate) async fn dispatch(id: u32, $server: &Server, event: &Event) {
+            match id {
+                $(id if id == EventType::$kind as u32 => {
+                    let Ok($data) = event.$get() else {
+                        warn(concat!("Could not read ", stringify!($kind), " event"));
+                        return;
+                    };
+                    listeners!(@handle event, $data $(, $set($value))?, $body);
+                })+
+                _ => {}
+            }
+        }
+    };
+    (@handle $event:ident, $data:ident, $body:block) => {
+        $body
+    };
+    (@handle $event:ident, $data:ident, $set:ident($value:expr), $body:block) => {
+        if !$data.cancelled && $body {
+            let mut $data = $data;
+            $data.cancelled = true;
+            if $event.$set($value).is_err() {
+                warn(concat!("Could not cancel event via ", stringify!($set)));
+            }
+        }
+    };
 }
 
-/// Applies PumpGsit changes only to events that earlier handlers permitted.
-pub(crate) async fn dispatch(server: &Server, event: &mut Event) {
-    match event {
-        Event::PlayerInteractEvent(e) if !e.cancelled => {
-            if posing(&e.player) && !config().pose.interact {
-                e.cancelled = true;
-                return;
-            }
-            if matches!(e.action, InteractAction::RightClickBlock)
-                && let Some(pos) = e.clicked_pos
-                && seat::start(&e.player, server, Activity::Sit, Some(pos))
-                    .await
-                    .is_ok()
-            {
-                e.cancelled = true;
-                hint(&e.player, "action-sit-info");
-            }
-        }
-        Event::PlayerInteractEntityEvent(e) if !e.cancelled => {
-            if posing(&e.player)
-                && (!matches!(e.action, EntityInteractionAction::Attack) || !config().pose.interact)
-            {
-                e.cancelled = true
-            } else if !e.sneaking
-                && matches!(e.action, EntityInteractionAction::InteractAt)
-                && seat::stack(&e.player, e.entity_id as u32, server).await
-            {
-                e.cancelled = true;
-                hint(&e.player, "action-playersit-info");
-            }
-        }
-        Event::PlayerToggleSneakEvent(e) if !e.cancelled && e.is_sneaking => {
-            // Accepted sneak input dismounts through Pumpkin immediately after this callback.
-            // Reconcile the actual ride after that change, allowing other listeners to cancel.
-            if seat::activity(&e.player).is_none() {
-                if config().player_sit.sneak_ejects
-                    && !e.player.is_flying()
-                    && e.player.as_entity().get_vehicle().is_none()
-                {
-                    seat::eject(&e.player, server).await
-                }
-                crawl::sneak(&e.player).await;
-            }
-        }
-        Event::EntityToggleSwimEvent(e)
-            if !e.is_swimming && crawl::prevent_swim_stop(e.entity_id) =>
+listeners! {
+    server;
+    PlayerInteract => get_player_interact, set_player_interact(e): |e| {
+        if posing(&e.player) && !config().pose.interact {
+            true
+        } else if matches!(e.action, InteractAction::RightClickBlock)
+            && let Some(pos) = e.clicked_pos
+            && seat::start(&e.player, server, Activity::Sit, Some(pos)).await.is_ok()
         {
-            e.cancelled = true
+            hint(&e.player, "action-sit-info");
+            true
+        } else {
+            false
         }
-        Event::EntityDismountEvent(e)
-            if seat::veto_dismount(e.entity_id as u32, e.dismounted_id as u32) =>
+    }
+    PlayerInteractEntity => get_player_interact_entity, set_player_interact_entity(e): |e| {
+        if posing(&e.player)
+            && (!matches!(e.action, EntityInteractionAction::Attack) || !config().pose.interact)
         {
-            e.cancelled = true
+            true
+        } else if !e.sneaking
+            && matches!(e.action, EntityInteractionAction::InteractAt)
+            && seat::stack(&e.player, e.entity_id as u32, server).await
+        {
+            hint(&e.player, "action-playersit-info");
+            true
+        } else {
+            false
         }
-        Event::PlayerMoveEvent(e) if !e.cancelled => {
+    }
+    PlayerToggleSneak => get_player_toggle_sneak: |e| {
+        // Reconcile the ride after Pumpkin processes accepted sneak input and dismounts.
+        if !e.cancelled && e.is_sneaking && seat::activity(&e.player).is_none() {
+            if config().player_sit.sneak_ejects
+                && !e.player.is_flying()
+                && e.player.as_entity().get_vehicle().is_none()
+            {
+                seat::eject(&e.player, server).await;
+            }
+            crawl::sneak(&e.player).await;
+        }
+    }
+    EntityToggleSwim => get_entity_toggle_swim, set_entity_toggle_swim(e): |e| {
+        !e.is_swimming && crawl::prevent_swim_stop(e.entity_id)
+    }
+    EntityDismount => get_entity_dismount, set_entity_dismount(e): |e| {
+        seat::veto_dismount(e.entity_id as u32, e.dismounted_id as u32)
+    }
+    PlayerMove => get_player_move: |e| {
+        if !e.cancelled {
             seat::accepted_move(&e.player);
-            crawl::moved(&e.player, e.to_position).await
+            crawl::moved(&e.player, e.to_position).await;
         }
-        Event::PlayerLeaveEvent(e) => {
-            preferences::forget(e.player.get_id());
-            crawl::cleanup(&e.player).await;
-            seat::disconnect(&e.player, server).await;
+    }
+    PlayerLeave => get_player_leave: |e| {
+        preferences::forget(e.player.get_id());
+        crawl::cleanup(&e.player).await;
+        seat::disconnect(&e.player, server).await;
+    }
+    PlayerDeath => get_player_death: |e| {
+        if !e.cancelled {
+            cleanup(&e.player, server).await;
         }
-        Event::PlayerDeathEvent(e) if !e.cancelled => cleanup(&e.player, server).await,
-        Event::PlayerTeleportEvent(e) if !e.cancelled => {
-            if seat::before_teleport(&e.player, server).await {
-                cleanup(&e.player, server).await
-            } else {
-                e.cancelled = true
-            }
+    }
+    PlayerTeleport => get_player_teleport, set_player_teleport(e): |e| {
+        if seat::before_teleport(&e.player, server).await {
+            cleanup(&e.player, server).await;
+            false
+        } else {
+            true
         }
-        Event::EntitiesLoadEvent(e) if !e.cancelled && e.entity_count > 0 => {
+    }
+    EntitiesLoad => get_entities_load: |e| {
+        if !e.cancelled && e.entity_count > 0 {
             for world in server.get_all_worlds() {
                 if let Some(chunk) = world.get_chunk(e.chunk_x, e.chunk_z) {
-                    seat::cleanup_entities(chunk.get_entities())
+                    seat::cleanup_entities(chunk.get_entities());
                 }
             }
         }
-        Event::PlayerChangeWorldEvent(e) if !e.cancelled => cleanup(&e.player, server).await,
-        Event::PlayerGamemodeChangeEvent(e)
-            if !e.cancelled && matches!(e.new_gamemode, GameMode::Spectator) =>
-        {
-            cleanup(&e.player, server).await
+    }
+    PlayerChangeWorld => get_player_change_world: |e| {
+        if !e.cancelled {
+            cleanup(&e.player, server).await;
         }
-        Event::PlayerToggleFlightEvent(e) if !e.cancelled && e.is_flying => {
-            crawl::cleanup(&e.player).await
+    }
+    PlayerGamemodeChange => get_player_gamemode_change: |e| {
+        if !e.cancelled && matches!(e.new_gamemode, GameMode::Spectator) {
+            cleanup(&e.player, server).await;
         }
-        Event::PlayerAnimationEvent(e)
-            if !e.cancelled && posing(&e.player) && e.animation_type.starts_with("ArmSwing") =>
-        {
-            pose::swing(&e.player, e.animation_type == "ArmSwingOff", server)
+    }
+    PlayerToggleFlight => get_player_toggle_flight: |e| {
+        if !e.cancelled && e.is_flying {
+            crawl::cleanup(&e.player).await;
         }
-        Event::EntityDamageEvent(e) if !e.cancelled => {
-            let rider = seat::rider(e.entity_id as u32);
-            if let Some((activity, uuid)) = rider {
-                if activity == Activity::PlayerSit {
-                    e.cancelled = matches!(e.damage_type, DamageType::Fall);
-                    return;
-                }
-                if activity.is_pose() {
-                    pose::hurt(uuid, server).await;
-                }
+    }
+    PlayerAnimation => get_player_animation: |e| {
+        if !e.cancelled && posing(&e.player) && e.animation_type.starts_with("ArmSwing") {
+            pose::swing(&e.player, e.animation_type == "ArmSwingOff", server);
+        }
+    }
+    EntityDamage => get_entity_damage, set_entity_damage(e): |e| {
+        let rider = seat::rider(e.entity_id as u32);
+        if let Some((Activity::PlayerSit, _)) = rider {
+            matches!(e.damage_type, DamageType::Fall)
+        } else {
+            if let Some((activity, uuid)) = rider
+                && activity.is_pose()
+            {
+                pose::hurt(uuid, server).await;
             }
             if config().get_up_damage
                 && e.damage > 0.0
@@ -164,40 +178,31 @@ pub(crate) async fn dispatch(server: &Server, event: &mut Event) {
                 && let Some(player) = server.get_player_by_uuid(uuid)
             {
                 crawl::stop(&player).await;
-                seat::stop(&player, server, true).await
+                seat::stop(&player, server, true).await;
             }
+            false
         }
-        Event::EntityDamageByEntityEvent(e) if !e.cancelled && !config().pose.interact => {
-            e.cancelled = seat::activity_by_id(e.damager_id as u32).is_some_and(Activity::is_pose)
-        }
-        Event::ProjectileLaunchEvent(e) if !e.cancelled && !config().pose.interact => {
-            e.cancelled = e
-                .shooter_id
+    }
+    EntityDamageByEntity => get_entity_damage_by_entity, set_entity_damage_by_entity(&e): |e| {
+        !config().pose.interact && seat::activity_by_id(e.damager_id as u32).is_some_and(Activity::is_pose)
+    }
+    ProjectileLaunch => get_projectile_launch, set_projectile_launch(e): |e| {
+        !config().pose.interact
+            && e.shooter_id
                 .and_then(|id| seat::activity_by_id(id as u32))
                 .is_some_and(Activity::is_pose)
-        }
-        Event::InventoryClickEvent(e)
-            if !e.cancelled
-                && posing(&e.player)
-                && matches!(e.player.get_gamemode(), GameMode::Creative) =>
-        {
-            e.cancelled = true
-        }
-        Event::InventoryCreativeEvent(e) if !e.cancelled && posing(&e.player) => e.cancelled = true,
-        Event::PlayerDropItemEvent(e)
-            if !e.cancelled
-                && posing(&e.player)
-                && matches!(e.player.get_gamemode(), GameMode::Creative) =>
-        {
-            e.cancelled = true
-        }
-        Event::PlayerCommandPreprocessEvent(e) if !e.cancelled => {
-            e.cancelled = blocked(&e.player, &e.command).await
-        }
-        Event::PlayerCommandSendEvent(e) if !e.cancelled => {
-            e.cancelled = blocked(&e.player, &e.command).await
-        }
-        _ => {}
+    }
+    InventoryClick => get_inventory_click, set_inventory_click(e): |e| {
+        posing(&e.player) && matches!(e.player.get_gamemode(), GameMode::Creative)
+    }
+    InventoryCreative => get_inventory_creative, set_inventory_creative(e): |e| {
+        posing(&e.player)
+    }
+    PlayerDropItem => get_player_drop_item, set_player_drop_item(e): |e| {
+        posing(&e.player) && matches!(e.player.get_gamemode(), GameMode::Creative)
+    }
+    PlayerCommandPreprocess => get_player_command_preprocess, set_player_command_preprocess(e): |e| {
+        blocked(&e.player, &e.command).await
     }
 }
 

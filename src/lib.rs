@@ -51,9 +51,10 @@ fn data_dir() -> PathBuf {
     PathBuf::from(context().get_data_folder())
 }
 
-/// Obtains an owned server handle for IPC callbacks that receive no server argument.
-fn server() -> Server {
-    context().get_server()
+/// Gets the server for an IPC callback while the plugin context is available.
+fn server() -> Option<Server> {
+    let ctx = HOST.with_borrow(Clone::clone)?;
+    Some(ctx.get_server())
 }
 
 /// Reports operational errors to the server console.
@@ -95,7 +96,6 @@ impl exports::pumpkin::plugin::metadata::Guest for PumpGsit {
         exports::pumpkin::plugin::metadata::PluginMetadata {
             name: env!("CARGO_PKG_NAME").into(),
             version: option_env!("PUMPKIN_PLUGIN_VERSION")
-                .or(option_env!("PUMPGSIT_BUILD_VERSION"))
                 .unwrap_or(env!("CARGO_PKG_VERSION"))
                 .into(),
             authors: vec!["PumpGsit contributors (based on GSit by Gecolay)".into()],
@@ -145,10 +145,9 @@ impl Guest for PumpGsit {
         pose::tick(&server).await;
         pumpkin_pie::refresh().await;
     }
-    /// Returns the modified event so Pumpkin can honor blocking cancellations.
-    async fn handle_event(_: u32, server: Server, mut event: Event) -> Event {
-        events::dispatch(&server, &mut event).await;
-        event
+    /// Dispatches a borrowed event resource for the duration of the callback.
+    async fn handle_event(id: u32, server: Server, event: &Event) {
+        events::dispatch(id, &server, event).await;
     }
     /// Routes Brigadier's selected command node to the corresponding PumpGsit operation.
     async fn handle_command(
@@ -172,7 +171,7 @@ impl Guest for PumpGsit {
             values: vec![],
         }
     }
-    /// Answers the optional PumpkinPIE expansion callback using current gameplay and SQLite state.
+    /// Resolves PumpkinPIE placeholders from the current pose or the player's saved preferences.
     async fn handle_ipc_message(sender: String, msg: Vec<u8>) -> Result<Vec<u8>, String> {
         pumpkin_pie::handle(sender, msg)
     }

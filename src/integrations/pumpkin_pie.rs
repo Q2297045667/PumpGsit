@@ -1,4 +1,4 @@
-//! Optional PumpkinPIE 0.2.6 expansion using its version-zero JSON IPC protocol.
+//! Optional PumpkinPIE expansion using its version-zero JSON IPC protocol.
 
 use crate::{
     bindings::pumpkin::plugin::{ipc, uuid},
@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
 const PROVIDER: &str = "PumpkinPIE";
-// Existing templates use the original PlaceholderAPI namespace even after the plugin rename.
+// Templates use the original GSit PlaceholderAPI namespace.
 const NAMESPACE: &str = "gsit";
 const NAMES: [&str; 6] = [
     "crawling",
@@ -98,7 +98,7 @@ fn resolve(callback: &Callback) -> Option<bool> {
     if !NAMES.contains(&callback.name.as_str()) {
         return None;
     }
-    let server = server();
+    let server = server()?;
     let (id, player) = if let Some(argument) = &callback.argument {
         let id = uuid::parse(argument)?;
         (id, server.get_player_by_uuid(id))

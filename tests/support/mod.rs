@@ -147,7 +147,10 @@ impl Server {
             );
             assert!(
                 !log.contains("Wasm plugin store driver failed")
-                    && !log.contains("Wasm scheduled task failed"),
+                    && !log.contains("Wasm scheduled task failed")
+                    && !log.contains("Wasm event dispatch failed")
+                    && !log.contains("PumpGsit: Could not read ")
+                    && !log.contains("PumpGsit: Could not cancel event"),
                 "{log}"
             );
         }
@@ -236,7 +239,6 @@ blocked_permissions = [{blocked}]
     let mut server = Server::start(cmd, root, label, port, false);
     server.wait("Server is now running");
     let version = std::env::var("PUMPKIN_PLUGIN_VERSION")
-        .or_else(|_| std::env::var("PUMPGSIT_BUILD_VERSION"))
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into());
     server.wait(expected.unwrap_or(&format!("Loaded PumpGsit ({version})")));
     server

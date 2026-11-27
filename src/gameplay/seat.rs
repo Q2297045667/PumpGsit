@@ -22,7 +22,6 @@ use std::{
 
 const SEAT_BASE_HEIGHT: f64 = 0.025;
 const TAG: &str = "pumpgsit.seat.v1";
-const LEGACY_TAG: &str = "gsit.pumpkin.seat.v1";
 pub type Key = (i32, i32, i32);
 
 #[derive(Clone, Copy, PartialEq)]
@@ -736,7 +735,7 @@ pub fn cleanup_entities(entities: Vec<world::Entity>) {
     for entity in entities {
         if pose::is_orphan(&entity)
             || (matches!(entity.get_type(), EntityType::BlockDisplay)
-                && (entity.has_scoreboard_tag(TAG) || entity.has_scoreboard_tag(LEGACY_TAG))
+                && entity.has_scoreboard_tag(TAG)
                 && entity.get_passengers().is_empty())
         {
             entity.remove()

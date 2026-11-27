@@ -1,4 +1,4 @@
-//! Java protocol 777 acceptance for seats, restart positions and clickable chat components.
+//! Java protocol 777 acceptance for seats, poses, restart positions and clickable chat components.
 
 use crate::support::{Server, boot, data_dir};
 use std::{
@@ -9,6 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tempfile::tempdir;
+
+const PLAYER_ENTITY_TYPE: u32 = 159; // minecraft:player in the Java 26.3 entity registry
 
 /// Encodes a nonnegative Minecraft VarInt for a packet length or numeric field.
 fn varint(mut value: u32) -> Vec<u8> {
@@ -63,6 +65,7 @@ struct Player {
     entity: Option<u32>,
     position: Option<[f64; 3]>,
     vehicle: Option<u32>,
+    player_entities: Vec<u32>,
     feedback: String,
     pong: u64,
 }
@@ -86,6 +89,7 @@ impl Player {
             entity: None,
             position: None,
             vehicle: None,
+            player_entities: Vec::new(),
             feedback: String::new(),
             pong: 0,
         };
@@ -115,7 +119,7 @@ impl Player {
         self.stream.write_all(&frame).unwrap();
     }
 
-    /// Handles setup, position, passengers, chat and liveness for a single server packet.
+    /// Handles setup, position, entities, passengers, chat and liveness for a single packet.
     fn receive(&mut self) {
         let length = integer(&mut self.stream) as usize;
         assert!(length <= 16 << 20, "Unexpected packet size {length}");
@@ -138,6 +142,22 @@ impl Player {
             (Phase::Config, 3) => {
                 self.send(3, &[]);
                 self.phase = Phase::Play;
+            }
+            (Phase::Play, 1) => {
+                // add_entity
+                let entity = integer(&mut body);
+                let _uuid: [u8; 16] = take(&mut body);
+                if integer(&mut body) == PLAYER_ENTITY_TYPE {
+                    // Keep duplicate player spawns visible to the pose assertions.
+                    self.player_entities.push(entity);
+                }
+            }
+            (Phase::Play, 78) => {
+                // remove_entities
+                for _ in 0..integer(&mut body) {
+                    let entity = integer(&mut body);
+                    self.player_entities.retain(|&id| id != entity);
+                }
             }
             (Phase::Play, 50) => self.entity = Some(u32::from_be_bytes(take(&mut body))),
             (Phase::Play, 73) => {
@@ -181,9 +201,10 @@ impl Player {
         while !predicate(self) {
             assert!(
                 Instant::now() < deadline,
-                "position {:?}, vehicle {:?}, last message {:?}",
+                "position {:?}, vehicle {:?}, player entities {:?}, last message {:?}",
                 self.position,
                 self.vehicle,
+                self.player_entities,
                 self.feedback
             );
             self.receive();
@@ -482,6 +503,109 @@ fn flying_stack() {
     drop(base);
     server.wait("SeatRider left the game");
     server.wait("SeatBottom left the game");
+    server.stop();
+}
+
+/// A viewer returning to an active pose sees its avatar once and loses it when the player stands.
+#[test]
+#[ignore = "requires PUMPGSIT_SERVER and PUMPGSIT_COMPONENT"]
+fn pose_viewer_range() {
+    let temp = tempdir().unwrap();
+    let mut server = boot(temp.path(), "pose-viewer", true, false, None);
+    let mut owner = Player::connect(&mut server, "PoseOwner", "en_us");
+    let mut viewer = Player::connect(&mut server, "PoseViewer", "en_us");
+    let [x, _, z] = owner.position.unwrap().map(|coord| coord.floor() as i32);
+    server.command(
+        &format!("fill {x} 299 {z} {} 299 {z} stone", x + 1),
+        "filled",
+    );
+    let [x, z] = [x, z].map(|coord| f64::from(coord) + 0.5);
+    let near = [x + 1., 300., z];
+    owner.stand_at(&mut server, "PoseOwner", [x, 300., z], 0, 0);
+    viewer.stand_at(&mut server, "PoseViewer", near, 0, 0);
+
+    let real_players = [owner.entity.unwrap(), viewer.entity.unwrap()];
+    let is_avatar = |id: &u32| !real_players.contains(id);
+    owner.command("lay");
+    owner.until(|p| p.vehicle.is_some());
+    viewer.until(|p| p.player_entities.iter().any(is_avatar));
+    let avatar = viewer
+        .player_entities
+        .iter()
+        .copied()
+        .find(is_avatar)
+        .unwrap();
+
+    viewer.stand_at(&mut server, "PoseViewer", [x + 128., 300., z], 0, 0);
+    viewer.until(|p| !p.player_entities.contains(&avatar));
+    viewer.stand_at(&mut server, "PoseViewer", near, 0, 0);
+    viewer.until(|p| p.player_entities.contains(&avatar));
+    thread::sleep(Duration::from_millis(250));
+    viewer.sync();
+    let visible: Vec<_> = viewer
+        .player_entities
+        .iter()
+        .copied()
+        .filter(is_avatar)
+        .collect();
+    assert_eq!(visible, [avatar]);
+
+    owner.send(43, &[32]); // player_input: sneak
+    owner.until(|p| p.vehicle.is_none());
+    viewer.until(|p| !p.player_entities.contains(&avatar));
+    drop((owner, viewer));
+    server.stop();
+}
+
+/// A seated player's blocked command and dismount request must reach Pumpkin as cancellations.
+#[test]
+#[ignore = "requires PUMPGSIT_SERVER and PUMPGSIT_COMPONENT"]
+fn seat_event_cancellations() {
+    let temp = tempdir().unwrap();
+    let mut server = boot(temp.path(), "seat-cancellations", true, false, None);
+    let path = data_dir(temp.path()).join("config.toml");
+    let config = fs::read_to_string(&path).unwrap();
+    fs::write(
+        path,
+        config
+            .replacen("get_up_sneak = true", "get_up_sneak = false", 1)
+            .replace(
+                r#"command_blacklist = ["skin", "nick"]"#,
+                r#"command_blacklist = ["crawl"]"#,
+            ),
+    )
+    .unwrap();
+    server.command("gsitreload", "reloaded");
+
+    let name = "SeatVeto";
+    let mut player = Player::connect(&mut server, name, "en_us");
+    let [x, _, z] = player.position.unwrap().map(|coord| coord.floor());
+    server.command(&format!("setblock {x} 299 {z} stone"), "Changed the block");
+    player.stand_at(&mut server, name, [x + 0.5, 300., z + 0.5], 0, 0);
+    player.command("sit");
+    player.until(|p| p.vehicle.is_some());
+
+    player.command("crawl toggle off");
+    player.chat("You are not allowed to run this command right now");
+    player.send(43, &[32]); // player_input: sneak
+    player.sync();
+    server.command(
+        "execute as SeatVeto on vehicle run tag @s add still_riding",
+        "still_riding",
+    );
+
+    player.command("sit");
+    player.until(|p| p.vehicle.is_none());
+    player.command("gsitprefs");
+    assert!(
+        player
+            .chat("Sneak gestures to crawl")
+            .contains("/crawl toggle off")
+    );
+    player.command("crawl toggle off");
+    player.chat("You have disabled");
+    drop(player);
+    server.wait("SeatVeto left the game");
     server.stop();
 }
 

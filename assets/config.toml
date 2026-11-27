@@ -45,7 +45,7 @@ double_sneak_time_ms = 400
 layers = 1
 default_enabled = true
 
-# Paths are relative to plugins/data/PumpGsit. Older configs without this section use the same SQLite file.
+# SQLite paths are relative to plugins/data/PumpGsit.
 [database]
 type = "sqlite"
 path = "data/data.db"

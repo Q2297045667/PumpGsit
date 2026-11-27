@@ -42,8 +42,7 @@ repo_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
     printf 'Build target wasm32-wasip3 (WASI 0.3), using the Pumpkin Wasm 0.2 plugin API.\n\n'
     printf 'Built from [%s](%s/commit/%s). [Installation](%s/blob/%s/README.md).\n\n' \
         "$GITHUB_SHA" "$repo_url" "$GITHUB_SHA" "$repo_url" "$GITHUB_SHA"
-    printf '%s\n\n' 'Upgrading from lowercase pumpgsit? Stop the server, back up plugins/data/pumpgsit, and migrate the data directory, plugin override and permission prefix to PumpGsit before startup.'
-    printf '[Upgrade and rollback instructions](%s/blob/%s/doc/存储.md).\n' "$repo_url" "$GITHUB_SHA"
+    printf '[Migrate player preferences from Bukkit GSit](%s/blob/%s/doc/存储.md).\n' "$repo_url" "$GITHUB_SHA"
     echo
     bash .github/scripts/build-changes.sh
 } > "$notes"

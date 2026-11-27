@@ -1,4 +1,4 @@
-//! Startup, reload, configuration migration and optional placeholder acceptance tests.
+//! Startup, reload, preference storage and optional placeholder acceptance tests.
 
 use crate::support::*;
 use rusqlite::Connection;
@@ -44,7 +44,7 @@ fn console_prefs(server: &mut Server, chinese: bool, sit: bool) {
     }
 }
 
-/// Exercises the console, localizations, rollback after invalid reloads and upgrades.
+/// Exercises console commands, translations, restarts and rollback after invalid reloads.
 #[test]
 #[ignore = "requires PUMPGSIT_SERVER and PUMPGSIT_COMPONENT"]
 fn server_smoke() {
@@ -131,41 +131,22 @@ fn server_smoke() {
     console_prefs(&mut server, true, false);
     server.command(&format!("sit toggle {PLAYER}"), "你可以通过右键坐下了");
     console_prefs(&mut server, true, true);
-    server.stop();
-    assert_eq!(count(&db, PLAYER), 0);
-    upgrade(&root.join("upgrade"), &fs::read_to_string(cfg).unwrap());
-}
 
-/// Migrates an older lowercase installation without a database section and reloads custom paths.
-fn upgrade(root: &Path, settings: &str) {
-    let data = data_dir(root);
-    let old = data.with_file_name("pumpgsit");
-    let staging = data.with_file_name("rename-in-progress");
-    fs::create_dir_all(old.join("data")).unwrap();
-    let legacy = settings.split_once("\n[database]\n").unwrap().0;
-    fs::write(old.join("config.toml"), legacy).unwrap();
-    fs::copy(LEGACY_DB, old.join("data/data.db")).unwrap();
-    fs::rename(old, &staging).unwrap();
-    fs::rename(staging, &data).unwrap();
-    let db = data.join("data/data.db");
-    let cfg = data.join("config.toml");
-    let mut server = boot(root, "legacy", true, false, None);
-    server.command(&format!("sit toggle {PLAYER}"), "你可以通过右键坐下了");
-    server.stop();
-    assert_eq!(count(&db, PLAYER), 0);
-    let mut server = boot(root, "post-upgrade", true, false, None);
-    server.command(&format!("sit toggle {PLAYER}"), "你不能通过右键坐下了");
-    let custom =
-        format!("{legacy}\n[database]\ntype = \"sqlite\"\npath = \"new/preferences.db\"\n");
+    let custom_db = data.join("new/preferences.db");
+    fs::create_dir_all(custom_db.parent().unwrap()).unwrap();
+    fs::copy(LEGACY_DB, &custom_db).unwrap();
+    let custom = fs::read_to_string(&cfg)
+        .unwrap()
+        .replace("data/data.db", "new/preferences.db");
     fs::write(&cfg, &custom).unwrap();
     server.command("gsitreload", "插件已成功重载");
-    server.command(&format!("sit toggle {PLAYER}"), "你不能通过右键坐下了");
+    server.command(&format!("sit toggle {PLAYER}"), "你可以通过右键坐下了");
     fs::write(&cfg, custom.replace("new/preferences.db", "../escaped.db")).unwrap();
     server.command("gsitreload", "之前的设置仍然生效");
-    server.command(&format!("sit toggle {PLAYER}"), "你可以通过右键坐下了");
+    server.command(&format!("sit toggle {PLAYER}"), "你不能通过右键坐下了");
     server.stop();
-    assert_eq!(count(&db, PLAYER), 1);
-    assert_eq!(count(&data.join("new/preferences.db"), PLAYER), 0);
+    assert_eq!(count(&db, PLAYER), 0);
+    assert_eq!(count(&custom_db, PLAYER), 1);
     assert!(!data.parent().unwrap().join("escaped.db").exists());
     assert_eq!(fs::read_dir(data.parent().unwrap()).unwrap().count(), 1);
 }
